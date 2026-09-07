@@ -219,7 +219,7 @@ button{font-family:inherit;}
 .nav-btn[aria-current="page"]{background:rgba(215,169,75,.16); color:#fff;}
 .nav-btn[aria-current="page"] svg{color:var(--accent); opacity:1;}
 .nav-spacer{flex:1;}
-.sidebar-foot{padding:10px; font-size:11.5px; color:#8891A1; border-top:1px solid rgba(255,255,255,.08); margin-top:6px;}
+.sidebar-foot{padding:8px 10px; font-size:10.5px; color:#8891A1; border-top:1px solid rgba(255,255,255,.08); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 
 .main{margin-left:var(--sidebar-w);}
 .topbar{
@@ -442,8 +442,7 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 .account-switch .acct-email{color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px;}
 .account-switch .acct-status{color:#B9C0CC; font-size:11px;}
 .account-switch button.link-btn{background:none; border:none; color:#EC8CA8; font-size:11.5px; font-weight:600; cursor:pointer; padding:0; text-decoration:underline;}
-.account-switch .acct-signedout{background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14); border-radius:8px; padding:9px 10px;}
-.account-switch .acct-signedout button{width:100%; margin-top:6px;}
+.account-switch .acct-signedout{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:2px 2px;}
 .auth-modal-backdrop{position:fixed; inset:0; background:rgba(20,14,18,.55); z-index:200; display:flex; align-items:center; justify-content:center; padding:20px;}
 .auth-modal{background:var(--surface); color:var(--ink); border-radius:14px; padding:24px; width:100%; max-width:360px; box-shadow:0 20px 60px rgba(0,0,0,.35);}
 .auth-modal h3{margin:0 0 4px;}
@@ -529,7 +528,7 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 <div class="app">
   <nav class="sidebar" aria-label="Primary">
     <div class="brand">
-      <div class="brand-mark">L</div>
+      <div class="brand-mark">S</div>
       <div class="brand-name">Steadyspend</div>
     </div>
     <div class="hh-switch">
@@ -543,7 +542,7 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
     <ul class="nav-list" id="nav-list"></ul>
     <div class="nav-spacer"></div>
     <div class="account-switch"></div>
-    <div class="sidebar-foot">Steadyspend Home &middot; one-time purchase<br>v0.1 prototype</div>
+    <div class="sidebar-foot">Steadyspend &middot; one-time purchase</div>
   </nav>
 
   <div class="main">
@@ -853,7 +852,7 @@ function renderAccountWidget(){
     var so = document.getElementById('acct-signout');
     if (so) so.addEventListener('click', signOutUser);
   } else {
-    wrap.innerHTML = '<div class="acct-signedout"><div class="acct-status">Not signed in — sign in to sync across every device</div><button class="btn btn-sm btn-primary" id="acct-signin-open" type="button">Sign in / Create account</button></div>';
+    wrap.innerHTML = '<div class="acct-signedout"><span class="acct-status">Not signed in</span><button class="link-btn" id="acct-signin-open" type="button">Sign in</button></div>';
     var op = document.getElementById('acct-signin-open');
     if (op) op.addEventListener('click', openAuthModal);
   }
