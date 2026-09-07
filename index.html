@@ -403,6 +403,9 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 .divider{height:1px; background:var(--line); margin:18px 0;}
 .stack{display:flex; flex-direction:column; gap:14px;}
 .hstack{display:flex; align-items:center; gap:10px;}
+.steps-list{margin:10px 0 0; padding-left:20px; display:flex; flex-direction:column; gap:8px;}
+.steps-list li{font-size:13px; color:var(--ink-soft); line-height:1.5;}
+.steps-list li strong{color:var(--ink);}
 .example-tag{font-size:11px; color:var(--ink-faint); border:1px dashed var(--line); border-radius:7px; padding:2px 8px;}
 .empty{color:var(--ink-faint); font-size:13px; padding:20px 0; text-align:center;}
 
@@ -584,6 +587,28 @@ var TODAY = new Date(2026,8,7); // fixed reference date so the demo always reads
 var LS_KEY = 'steadyspend-state-v1';
 var HH_INDEX_KEY = 'steadyspend-households-v1';
 var SEED = null;
+
+// Captured as early as possible — Chrome/Edge/Android fire this once, and only if we've already
+// called preventDefault() do we get to trigger it ourselves later (from a button click on the
+// Settings page) instead of the browser showing its own mini-infobar on its own schedule.
+// iOS Safari never fires this event at all (Apple's PWA install flow is manual-only via the Share
+// sheet), and this Claude preview won't fire it either since it's loaded in a sandboxed iframe —
+// both are handled with plain written instructions in renderSettings() below.
+var deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', function(e){
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  if (currentView()==='settings') route(); // re-render so the real install button replaces the manual-steps fallback
+});
+window.addEventListener('appinstalled', function(){
+  deferredInstallPrompt = null;
+  if (currentView()==='settings') route();
+});
+function isStandaloneInstalled(){
+  try {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  } catch(e){ return false; }
+}
 try { SEED = JSON.parse(document.getElementById('state-store').textContent); } catch(e){ console.error('Steadyspend: failed to parse seed state', e); SEED = blankHouseholdState('My Household'); }
 
 function blankHouseholdState(name){
@@ -759,9 +784,11 @@ function onSignedIn(user, initialLoad){
   cloudPullHouseholds(initialLoad);
 }
 
-// Pulls every household this account owns. First-ever sign-in on any device (no cloud rows yet) instead
-// PUSHES this device's current local households up as the seed — signing in adopts what's already here
-// rather than wiping it. On every later sign-in, the cloud copy is the source of truth.
+// Pulls every household this account owns. A brand-new account (no cloud rows yet) always starts
+// from a genuinely blank household — it never adopts whatever happens to already be sitting in this
+// browser, which (especially right after confirming a signup email) is usually still the untouched
+// example data this prototype ships with. A new account should look like a new account, not inherit
+// someone else's demo budget. On every later sign-in, the cloud copy is always the source of truth.
 function cloudPullHouseholds(initialLoad){
   if (!supabaseClient || !currentUser) return;
   supabaseClient.from('budgets').select('household_id,name,state').eq('user_id', currentUser.id).then(function(res){
@@ -776,13 +803,17 @@ function cloudPullHouseholds(initialLoad){
       persistLocalOnly();
       renderHouseholdSwitcher(); renderCurrencySwitcher(); route();
       toast('Signed in — synced from your account');
-    } else if (initialLoad) {
-      var toPush = hhIndex.list.slice();
-      toPush.forEach(function(h){
-        var s = h.id===hhIndex.activeId ? state : loadHouseholdState(h.id);
-        supabaseClient.from('budgets').upsert({user_id:currentUser.id, household_id:h.id, name:h.name, state:s, updated_at:new Date().toISOString()}, {onConflict:'user_id,household_id'});
-      });
-      toast('Signed in — this device is now backed up to your account');
+    } else {
+      var freshId = 'h'+Date.now();
+      var freshName = 'My Household';
+      state = blankHouseholdState(freshName);
+      hhIndex.list = [{id:freshId, name:freshName}];
+      hhIndex.activeId = freshId;
+      hhIndexSave(hhIndex);
+      persistLocalOnly();
+      supabaseClient.from('budgets').upsert({user_id:currentUser.id, household_id:freshId, name:freshName, state:state, updated_at:new Date().toISOString()}, {onConflict:'user_id,household_id'});
+      renderHouseholdSwitcher(); renderCurrencySwitcher(); route();
+      toast('Account created — starting with a clean household');
     }
   }).catch(function(){ /* offline mid-session — local copy keeps working, will sync on the next successful save */ });
 }
@@ -822,7 +853,7 @@ function renderAccountWidget(){
     var so = document.getElementById('acct-signout');
     if (so) so.addEventListener('click', signOutUser);
   } else {
-    wrap.innerHTML = '<div class="acct-signedout"><div class="acct-status">Not signed in — this device only</div><button class="btn btn-sm btn-primary" id="acct-signin-open" type="button">Sign in / Create account</button></div>';
+    wrap.innerHTML = '<div class="acct-signedout"><div class="acct-status">Not signed in — sign in to sync across every device</div><button class="btn btn-sm btn-primary" id="acct-signin-open" type="button">Sign in / Create account</button></div>';
     var op = document.getElementById('acct-signin-open');
     if (op) op.addEventListener('click', openAuthModal);
   }
@@ -850,7 +881,7 @@ function openAuthModal(){
         '<div class="auth-status" id="auth-status"></div>'+
         '<div class="auth-actions"><button type="submit" class="btn btn-primary" id="auth-submit">Sign in</button></div>'+
       '</form>'+
-      '<button type="button" class="guest-link" id="auth-guest-link">Continue without an account (this device only)</button>'
+      '<button type="button" class="guest-link" id="auth-guest-link">Continue without an account (data stays on this device only)</button>'
     )+
   '</div>';
   document.body.appendChild(back);
@@ -892,9 +923,15 @@ function wireAuthModal(sdkDown){
     submitBtn.disabled = true;
     statusEl.className = 'auth-status info';
     statusEl.textContent = mode==='signin' ? 'Signing in…' : 'Creating your account…';
+    // emailRedirectTo sends the confirmation link back to wherever this app is ACTUALLY running
+    // (window.location.origin), instead of Supabase's default (whatever "Site URL" is set to in the
+    // Supabase dashboard — often left at a placeholder like localhost, which is exactly the wrong
+    // destination once this is deployed for real). Supabase also requires this exact URL to be listed
+    // under Authentication → URL Configuration → Redirect URLs in the dashboard, or it silently falls
+    // back to the Site URL anyway — that dashboard step still has to be done once, by hand.
     var call = mode==='signin'
       ? supabaseClient.auth.signInWithPassword({email:email, password:password})
-      : supabaseClient.auth.signUp({email:email, password:password});
+      : supabaseClient.auth.signUp({email:email, password:password, options:{emailRedirectTo: window.location.origin + window.location.pathname}});
     call.then(function(res){
       submitBtn.disabled = false;
       if (res.error){ statusEl.className='auth-status err'; statusEl.textContent = res.error.message; return; }
@@ -1444,7 +1481,9 @@ function ic(name){
     shield: '<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/>',
     plane: '<path d="M3 13l7-2 4-8 2 1-2 7 6 1 2 2-8 1-3 6-2-1 1-6-7-1z"/>',
     home: '<path d="M4 11l8-7 8 7"/><path d="M6 10v9h12v-9"/>',
-    spark: '<path d="M12 3l1.6 4.6L18 9l-4.4 1.4L12 15l-1.6-4.6L6 9l4.4-1.4L12 3z"/>'
+    spark: '<path d="M12 3l1.6 4.6L18 9l-4.4 1.4L12 15l-1.6-4.6L6 9l4.4-1.4L12 3z"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V20a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H4a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H10a1.7 1.7 0 0 0 1-1.6V4a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V10a1.7 1.7 0 0 0 1.6 1H20a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.6 1z"/>',
+    apple: '<path d="M16.4 2.5c.1 1.1-.3 2.2-1 3-.7.8-1.9 1.5-3 1.4-.1-1.1.4-2.3 1.1-3 .7-.8 1.9-1.4 2.9-1.4z"/><path d="M20.5 17.2c-.5 1.2-.8 1.7-1.5 2.7-1 1.4-2.3 3.2-4 3.2-1.5 0-1.9-1-3.9-1s-2.5 1-4 1c-1.7 0-3-1.6-4-3-2.7-3.9-3-8.5-1.3-10.9 1.2-1.7 3.1-2.7 4.9-2.7 1.5 0 2.7 1 4 1 1.2 0 2.2-1 4-1 1.5 0 3.1.8 4.2 2.2-3.7 2-3.1 7.3 1.6 8.5z"/>'
   };
   return '<svg '+S+'>'+(map[name]||map.overview)+'</svg>';
 }
@@ -1458,12 +1497,14 @@ var VIEWS = [
   {id:'calendar', label:'Calendar', icon:'calendar'},
   {id:'debt', label:'Debt Payoff', icon:'debt'},
   {id:'savings', label:'Savings', icon:'savings'},
-  {id:'networth', label:'Net Worth', icon:'networth'}
+  {id:'networth', label:'Net Worth', icon:'networth'},
+  {id:'settings', label:'Settings', icon:'settings'}
 ];
 var HEADS = {overview:['Overview','A live snapshot of the household budget'],income:['Income','Every paycheck and payment coming in — kept separate from spending'],budget:['Main Budget','Set up your bills and everyday spending — the core of your monthly plan'],
   transactions:['Transactions','Every dollar in and out, categorized automatically'],calendar:['Calendar','Bills, paydays, and weekly cash flow at a glance'],
   debt:['Debt Payoff','Snowball or avalanche — see the real payoff date'],savings:['Sinking Funds & Savings','Goals that fill themselves in, month over month'],
-  networth:['Net Worth','Assets and liabilities, tracked over time']};
+  networth:['Net Worth','Assets and liabilities, tracked over time'],
+  settings:['Settings','Install Steadyspend, and manage your account']};
 
 function currentView(){ var h=(location.hash||'#overview').slice(1); return VIEWS.some(function(v){return v.id===h;})?h:'overview'; }
 
@@ -1491,7 +1532,7 @@ function route(){
   var el = document.getElementById('views');
   Object.keys(chartInstances).forEach(killChart);
   var renderers = {overview:renderOverview, income:renderIncome, budget:renderBudget, transactions:renderTransactions, calendar:renderCalendar,
-    debt:renderDebt, savings:renderSavings, networth:renderNetWorth};
+    debt:renderDebt, savings:renderSavings, networth:renderNetWorth, settings:renderSettings};
   el.innerHTML = renderers[v]();
   wireView(v);
 }
@@ -2134,6 +2175,111 @@ function renderNetWorth(){
       '</div>'+
     '</div>'+
   '</div>';
+}
+
+/* ============================================================
+   SETTINGS — two sub-tabs: "Install" (Add to Home Screen guidance, from Round 11's PWA work) and
+   "Instructions" (a general how-to-use walkthrough; ships with a placeholder video slot the user
+   said they'll fill in with a real tutorial video later — see the comment above VIDEO_TUTORIAL_URL).
+   settingsTab is deliberately NOT persisted — it's just which sub-tab is showing right now, reset to
+   "install" every time you leave and come back, same idea as rangeState's mode but view-local.
+   ============================================================ */
+var settingsTab = 'install';
+
+// Swap this from null to a real embeddable video URL (e.g. an mp4 file link, or a YouTube/Vimeo
+// embed URL) once the tutorial video exists — renderInstructionsTab() below picks it up automatically
+// and replaces the placeholder box with a real <video> or <iframe>. Nothing else needs to change.
+var VIDEO_TUTORIAL_URL = null;
+
+function renderSettings(){
+  return '<div class="view">'+
+    '<div class="seg" style="margin-bottom:20px;">'+
+      '<button type="button" data-settingstab="install" class="'+(settingsTab==='install'?'active':'')+'">Install</button>'+
+      '<button type="button" data-settingstab="instructions" class="'+(settingsTab==='instructions'?'active':'')+'">Instructions</button>'+
+    '</div>'+
+    (settingsTab==='instructions' ? renderInstructionsTab() : renderInstallTab())+
+  '</div>';
+}
+
+function renderInstallTab(){
+  var installed = isStandaloneInstalled();
+  var canPrompt = !!deferredInstallPrompt;
+
+  var statusCard;
+  if (installed){
+    statusCard = '<div class="card card-pad">'+
+      '<div class="hstack" style="gap:10px; align-items:center;">'+ic('check')+'<div><div class="card-title" style="margin:0;">Already installed</div><div class="faint">You\'re using Steadyspend from your home screen right now.</div></div></div>'+
+    '</div>';
+  } else if (canPrompt){
+    statusCard = '<div class="card card-pad">'+
+      '<div class="card-title">Add to your home screen</div>'+
+      '<p class="faint" style="margin:6px 0 14px;">Your browser can install Steadyspend directly — one tap, no app store.</p>'+
+      '<button class="btn btn-primary" id="pwa-install-btn">'+ic('home')+' Install Steadyspend</button>'+
+      '<div id="pwa-install-status" class="faint" style="margin-top:10px;"></div>'+
+    '</div>';
+  } else {
+    statusCard = '<div class="card card-pad">'+
+      '<div class="card-title">Add to your home screen</div>'+
+      '<p class="faint" style="margin:6px 0 0;">Your specific browser decides when it offers a one-tap install. If you don\'t see a button above, use the manual steps for your device below — they always work.</p>'+
+    '</div>';
+  }
+
+  return statusCard+
+    '<div class="grid grid-2" style="margin-top:16px;">'+
+      '<div class="card card-pad">'+
+        '<div class="hstack" style="gap:8px; align-items:center; margin-bottom:4px;">'+ic('apple')+'<div class="card-title" style="margin:0;">iPhone &amp; iPad (Safari)</div></div>'+
+        '<ol class="steps-list">'+
+          '<li>Open this page in <strong>Safari</strong> (not Chrome — iOS requires Safari for this).</li>'+
+          '<li>Tap the <strong>Share</strong> icon — the square with an arrow pointing up, in the bottom toolbar.</li>'+
+          '<li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>'+
+          '<li>Tap <strong>Add</strong> in the top right.</li>'+
+        '</ol>'+
+      '</div>'+
+      '<div class="card card-pad">'+
+        '<div class="hstack" style="gap:8px; align-items:center; margin-bottom:4px;">'+ic('sync')+'<div class="card-title" style="margin:0;">Android (Chrome)</div></div>'+
+        '<ol class="steps-list">'+
+          '<li>Tap the <strong>⋮</strong> menu (three dots) in the top right of Chrome.</li>'+
+          '<li>Tap <strong>Add to Home screen</strong> (or <strong>Install app</strong>).</li>'+
+          '<li>Tap <strong>Install</strong> to confirm.</li>'+
+        '</ol>'+
+      '</div>'+
+      '<div class="card card-pad">'+
+        '<div class="hstack" style="gap:8px; align-items:center; margin-bottom:4px;">'+ic('home')+'<div class="card-title" style="margin:0;">Desktop (Chrome or Edge)</div></div>'+
+        '<ol class="steps-list">'+
+          '<li>Look for a small <strong>install icon</strong> at the right edge of the address bar (a monitor with a down arrow).</li>'+
+          '<li>Click it, then click <strong>Install</strong>.</li>'+
+          '<li>Steadyspend opens in its own window, separate from your browser tabs.</li>'+
+        '</ol>'+
+      '</div>'+
+      '<div class="card card-pad">'+
+        '<div class="card-title">Why install it?</div>'+
+        '<p class="faint" style="margin:6px 0 0;">It opens like a real app — its own icon, no browser address bar, works full-screen — and once installed, the parts of the app you\'ve already loaded keep working even with a spotty connection. Your data and login are exactly the same either way; installing just changes how you open it.</p>'+
+      '</div>'+
+    '</div>';
+}
+
+function renderInstructionsTab(){
+  var videoBlock = VIDEO_TUTORIAL_URL ?
+    ('<video controls style="width:100%; border-radius:12px; display:block;" src="'+esc(VIDEO_TUTORIAL_URL)+'"></video>') :
+    ('<div style="aspect-ratio:16/9; border-radius:12px; background:var(--surface-2); border:1px dashed var(--line); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--ink-faint);">'+
+      ic('spark')+'<div style="font-size:13px; font-weight:600;">Video walkthrough coming soon</div>'+
+    '</div>');
+
+  return '<div class="card card-pad" style="margin-bottom:16px;">'+
+      '<div class="card-title">Watch: getting started with Steadyspend</div>'+
+      '<div style="margin-top:12px;">'+videoBlock+'</div>'+
+    '</div>'+
+    '<div class="card card-pad">'+
+      '<div class="card-title">Quick start, in words</div>'+
+      '<ol class="steps-list">'+
+        '<li><strong>Income</strong> — add every paycheck or payment coming in, with how often it lands.</li>'+
+        '<li><strong>Main Budget</strong> — set up your recurring bills and everyday spending categories with a monthly target for each.</li>'+
+        '<li><strong>Transactions</strong> — log what you actually spend as you go (or import a CSV export from your bank).</li>'+
+        '<li><strong>Overview</strong> — your at-a-glance dashboard: what\'s left to spend, what\'s coming up, and where you stand this month.</li>'+
+        '<li><strong>Debt Payoff &amp; Savings</strong> — set up loans and savings goals once; Steadyspend tracks the payoff date and goal progress automatically from there.</li>'+
+        '<li><strong>Settings</strong> (this page) — install Steadyspend to your home screen, and come back here any time you need a refresher.</li>'+
+      '</ol>'+
+    '</div>';
 }
 
 /* ============================================================
@@ -2799,6 +2945,27 @@ function wireView(view){
     Array.prototype.forEach.call(document.querySelectorAll('[data-asset-value]'), function(inp){
       inp.addEventListener('change', function(){ var idx = parseInt(inp.getAttribute('data-asset-value')); state.netWorth.assets[idx].value = clampMoney(inp.value); persist(); route(); });
     });
+  }
+
+  if (view==='settings'){
+    Array.prototype.forEach.call(document.querySelectorAll('[data-settingstab]'), function(btn){
+      btn.addEventListener('click', function(){ settingsTab = btn.getAttribute('data-settingstab'); route(); });
+    });
+    var installBtn = document.getElementById('pwa-install-btn');
+    if (installBtn){
+      installBtn.addEventListener('click', function(){
+        if (!deferredInstallPrompt) return;
+        var statusEl = document.getElementById('pwa-install-status');
+        deferredInstallPrompt.prompt();
+        deferredInstallPrompt.userChoice.then(function(choice){
+          deferredInstallPrompt = null;
+          // Don't re-render here — the separate 'appinstalled' listener flips this card to the
+          // "already installed" state once the OS actually finishes, which can lag slightly behind
+          // this promise resolving. Re-rendering immediately would wipe this message before it's read.
+          if (statusEl) statusEl.textContent = (choice && choice.outcome === 'accepted') ? 'Installed — check your home screen.' : 'No problem — you can install any time from this page.';
+        }).catch(function(){});
+      });
+    }
   }
 
 }
