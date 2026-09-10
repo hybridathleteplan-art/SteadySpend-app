@@ -2731,6 +2731,34 @@ function significantMerchantWord(key){
   for (var i=0;i<words.length;i++){ if (words[i].length>=3 && !MERCHANT_STOP_WORDS[words[i]]) return words[i]; }
   return words[0]||'';
 }
+// Built-in "everyone recognizes these" merchant list, checked ONLY when your own transaction history has
+// no opinion yet — this is what makes a first import useful even for a brand-new user with zero history:
+// instead of every single row landing on "Other" and needing a tap, common vendors get a real starting
+// guess immediately. Your own history (above) always wins when it has an answer, since it reflects how
+// YOU actually categorize things; this is just a sensible net under it. Keywords are matched against the
+// normalized merchant key, so they're already lowercase with punctuation collapsed to spaces.
+var COMMON_MERCHANT_CATEGORIES = [
+  {category:'Groceries', keywords:['trader joe','whole foods','safeway','kroger','albertsons','publix','aldi','costco','sams club','walmart','target','grocery','grocer','food lion','wegmans','stop shop','harris teeter','h e b','vons','ralphs','instacart']},
+  {category:'Dining Out', keywords:['starbucks','mcdonald','chipotle','subway','chick fil a','wendys','taco bell','burger king','dominos','pizza hut','panera','dunkin','doordash','uber eats','grubhub','postmates','restaurant','cafe','coffee','diner','bistro','bakery']},
+  {category:'Transportation', keywords:['uber','lyft','shell','chevron','exxon','mobil','conoco','arco','texaco','gas station','fuel','parking','transit','metro','mta','amtrak','car wash','auto repair','jiffy lube']},
+  {category:'Entertainment', keywords:['netflix','spotify','hulu','disney','hbo','youtube premium','apple music','apple tv','peloton','playstation','xbox','steam','cinema','theater','theatre','amc','regal']},
+  {category:'Utilities', keywords:['electric','power company','pg e','con edison','coned','duke energy','water utility','sewer','gas company','internet','comcast','xfinity','spectrum','fios','cox communications']},
+  {category:'Phone', keywords:['verizon wireless','t mobile','tmobile','sprint','att mobility','att wireless','mint mobile','cricket wireless']},
+  {category:'Shopping', keywords:['amazon','ebay','etsy','best buy','ikea','home depot','lowes','macys','nordstrom','tj maxx','marshalls','ross stores']},
+  {category:'Personal Care', keywords:['cvs','walgreens','rite aid','pharmacy','urgent care','dental','dentist','optometry','vision center','gym','fitness','planet fitness','la fitness','salon','barber','spa']},
+  {category:'Insurance', keywords:['insurance','geico','allstate','progressive ins','state farm']},
+  {category:'Salary', income:true, keywords:['payroll','direct deposit','salary','paycheck']}
+];
+function guessFromCommonMerchants(key, isIncome){
+  for (var i=0;i<COMMON_MERCHANT_CATEGORIES.length;i++){
+    var entry = COMMON_MERCHANT_CATEGORIES[i];
+    if (!!entry.income !== !!isIncome) continue;
+    for (var j=0;j<entry.keywords.length;j++){
+      if (key.indexOf(entry.keywords[j]) >= 0) return entry.category;
+    }
+  }
+  return null;
+}
 function guessCategoryForMerchant(merchantRaw, isIncome){
   var fallback = isIncome ? 'Other income' : 'Other';
   var key = normalizeMerchantKey(merchantRaw);
@@ -2754,7 +2782,12 @@ function guessCategoryForMerchant(merchantRaw, isIncome){
     return bestCat;
   }
   var best = pickBest(tallyExact) || pickBest(tallySubstr) || pickBest(tallyFirstWord);
-  return best ? { category:best, estimated:true } : { category:fallback, estimated:false };
+  if (best) return { category:best, estimated:true };
+  // Nothing in your own history yet (first-time user, or just a brand-new vendor for you) — fall back
+  // to the common-merchant dictionary so imports still come in pre-filled instead of a wall of "Other".
+  var commonGuess = guessFromCommonMerchants(key, isIncome);
+  if (commonGuess) return { category: commonGuess, estimated:true };
+  return { category: fallback, estimated:false };
 }
 function guessColumn(headers, candidates){
   var lower = headers.map(function(h){ return h.trim().toLowerCase(); });
