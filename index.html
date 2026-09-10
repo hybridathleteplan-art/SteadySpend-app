@@ -383,6 +383,8 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 .progress-ring-label{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-family:var(--font-mono); font-weight:700; font-size:15px; color:var(--ink);}
 .goal-ring-info{min-width:0; flex:1;}
 .goal-ring-info .goal-title{margin-bottom:2px;}
+.goal-required-note{font-size:12.5px; color:var(--ink-soft); background:var(--surface-2); border-radius:10px; padding:10px 12px; line-height:1.4;}
+.goal-required-note strong{color:var(--ink); font-family:var(--font-mono);}
 
 /* ============ DEBT ============ */
 .debt-row{display:flex; align-items:center; gap:14px; padding:16px 0; border-bottom:1px solid var(--line);}
@@ -1035,6 +1037,36 @@ function shiftYm(ym, delta){
   var y = Math.floor(total/12), m = ((total%12)+12)%12;
   return y+'-'+String(m+1).padStart(2,'0');
 }
+// ===== Savings goal math: monthly contribution is DERIVED from (total goal - saved) / months until the
+// user's target date, never entered directly — so it automatically rises if the user falls behind. =====
+function monthsBetweenYm(fromYm, toYm){
+  var f = parseYM(fromYm), t = parseYM(toYm);
+  return (t.y*12+t.m) - (f.y*12+f.m);
+}
+// Existing goals (pre-dating this feature) won't have a targetDate yet — synthesize one from whatever
+// monthly amount they already had, so nothing looks broken on first load after the update.
+function ensureGoalTargetDate(g){
+  if (g.targetDate) return;
+  var monthsOut = (g.monthly>0) ? Math.max(1, Math.ceil(Math.max(0,g.goal-g.saved)/g.monthly)) : 12;
+  g.targetDate = shiftYm(ymOfDate(TODAY), monthsOut);
+}
+function goalMonthsRemaining(g){
+  var months = monthsBetweenYm(ymOfDate(TODAY), g.targetDate);
+  return Math.max(1, months);
+}
+function goalRequiredMonthly(g){
+  var remaining = Math.max(0, g.goal - g.saved);
+  return remaining>0 ? Math.ceil(remaining/goalMonthsRemaining(g)) : 0;
+}
+// Recomputes every goal's required monthly contribution from its target date — called once per route()
+// so ANY page reading g.monthly (Overview insights, Budget summary, Savings itself) always sees a fresh
+// number, and a missed month automatically raises what's needed going forward.
+function normalizeSavingsGoals(){
+  (state.savings||[]).forEach(function(g){
+    ensureGoalTargetDate(g);
+    g.monthly = goalRequiredMonthly(g);
+  });
+}
 function relTime(iso){
   var d = new Date(iso); var diffMs = TODAY.getTime() - d.getTime();
   var mins = Math.round(diffMs/60000);
@@ -1565,6 +1597,28 @@ function exportCSV(){
     toast('Download isn’t available in this view — try Print summary instead.');
   }
 }
+// Full-data export — a JSON download of the entire household state (bills, income, transactions,
+// goals, debts, net worth, settings, everything), not just the date-scoped transactions CSV above.
+function exportAllData(){
+  var payload = JSON.stringify(state, null, 2);
+  var hhName = (state.household && state.household.name) ? state.household.name : 'household';
+  var safeName = hhName.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'household';
+  var filename = 'steadyspend-'+safeName+'-full-export-'+state.today+'.json';
+  if (downloadsCap){
+    downloadsCap.save({ filename:filename, data: payload }).catch(function(){ toast('Download was declined or unavailable.'); });
+    return;
+  }
+  try {
+    var blob = new Blob([payload], {type:'application/json;charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+    document.body.removeChild(a); setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    toast('Full data export downloaded');
+  } catch(e){
+    toast('Download isn’t available in this view.');
+  }
+}
 function printReport(){
   var r = resolveRange();
   var m = metricsForRange(r.start, r.end);
@@ -1663,6 +1717,7 @@ function killChart(id){ if (chartInstances[id]){ chartInstances[id].destroy(); d
 
 function route(){
   try { if (document.activeElement && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur(); } catch(e){}
+  normalizeSavingsGoals();
   var v = currentView();
   renderNav();
   document.getElementById('view-heading').textContent = HEADS[v][0];
@@ -2172,16 +2227,22 @@ function renderTransactions(){
       '<div id="csv-status" class="faint"></div>'+
       '<div id="csv-mapping"></div>'+
     '</div>'+
-    '<div class="card"><div class="table-wrap"><table>'+
-      '<thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Note</th><th class="amt">Amount</th></tr></thead>'+
+    '<div class="card">'+
+      '<div class="hstack" style="justify-content:space-between; padding:14px 16px 0;">'+
+        '<div class="card-title" style="margin-bottom:0;">Transactions — '+monthLabel(ym)+'</div>'+
+        (tx.length ? '<button class="btn btn-ghost btn-sm" id="tx-delete-all-btn" title="Delete every transaction shown below for this month — handy to recover from a bad PDF/CSV import" style="color:var(--negative);">'+ic('trash')+' Delete all ('+tx.length+')</button>' : '')+
+      '</div>'+
+      '<div class="table-wrap"><table>'+
+      '<thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Note</th><th class="amt">Amount</th><th></th></tr></thead>'+
       '<tbody>'+ (tx.length ? tx.map(function(t){
         var sign = t.type==='income'?'+':'–';
         var color = t.type==='income'?'var(--positive)':'var(--ink)';
         var dotColor = t.type==='income' ? 'var(--positive)' : catChartColor(t.category);
         return '<tr><td class="num">'+t.date+'</td><td><span class="dot" style="background:'+dotColor+'; margin-right:8px;"></span>'+esc(t.merchant)+(t.auto?' <span class="pill pill-neutral" style="margin-left:4px;">auto</span>':'')+'</td>'+
           '<td>'+esc(t.category)+'</td><td class="faint">'+(t.note?esc(t.note):'')+'</td>'+
-          '<td class="amt" style="color:'+color+'; font-weight:700;">'+sign+' '+fmtTxAmount(t)+'</td></tr>';
-      }).join('') : '<tr><td colspan="5" class="empty">No transactions yet this month.</td></tr>') +
+          '<td class="amt" style="color:'+color+'; font-weight:700;">'+sign+' '+fmtTxAmount(t)+'</td>'+
+          '<td class="amt"><button class="btn btn-ghost btn-sm" data-tx-remove="'+t.id+'" title="Delete transaction" style="padding:2px 8px; font-size:15px; line-height:1;">&times;</button></td></tr>';
+      }).join('') : '<tr><td colspan="6" class="empty">No transactions yet this month.</td></tr>') +
       '</tbody></table></div></div>'+
   '</div>';
 }
@@ -2315,24 +2376,27 @@ function progressRing(ratio, color, size){
 function renderSavings(){
   var goalCards = state.savings.map(function(g){
     var ratio = clamp(g.saved/g.goal*100,0,100);
-    var remaining = g.goal-g.saved;
-    var monthsToGo = g.monthly>0?Math.ceil(remaining/g.monthly):Infinity;
-    var eta = isFinite(monthsToGo) ? new Date(TODAY.getFullYear(), TODAY.getMonth()+monthsToGo,1).toLocaleDateString('en-US',{month:'short',year:'numeric'}) : '—';
+    var remaining = Math.max(0, g.goal-g.saved);
+    var eta = monthLabel(g.targetDate);
     var ringColor = ratio>=100 ? 'var(--positive)' : 'var(--accent)';
+    var goalMsg = remaining<=0
+      ? 'Goal reached — nice work!'
+      : 'To reach your goal by '+eta+' you need to put in <strong>'+usd0(g.monthly)+' a month</strong> from now on.';
     return '<div class="card goal-card">'+
       '<div class="hstack" style="justify-content:space-between; align-items:flex-start;">'+
         '<div class="goal-ring-row">'+
           '<div class="progress-ring-wrap">'+progressRing(ratio, ringColor, 72)+'<div class="progress-ring-label">'+Math.round(ratio)+'%</div></div>'+
-          '<div class="goal-ring-info"><div class="goal-title">'+esc(g.name)+'</div><div class="goal-sub">on track for '+eta+'</div></div>'+
+          '<div class="goal-ring-info"><div class="goal-title">'+esc(g.name)+'</div><div class="goal-sub">target: '+eta+'</div></div>'+
         '</div>'+
         '<button class="btn btn-ghost btn-sm" data-goal-remove="'+g.id+'" title="Remove goal" style="padding:2px 8px; font-size:15px; line-height:1; flex:none;">&times;</button>'+
       '</div>'+
       '<div class="goal-figures"><span class="goal-saved">'+usd0(g.saved)+'</span><span class="goal-goal">saved of '+usd0(g.goal)+' total goal</span></div>'+
       '<div class="hstack" style="gap:8px;">'+
-        '<div class="field" style="flex:1; margin-bottom:0;"><label>Saved so far</label><input type="number" min="0" step="10" data-goal-saved="'+g.id+'" value="'+g.saved+'" title="Fix this directly if the running total is ever wrong — no need to zero it out and re-add funds"></div>'+
-        '<div class="field" style="flex:1; margin-bottom:0;"><label>Total goal</label><input type="number" min="1" step="50" data-goal-target="'+g.id+'" value="'+g.goal+'" title="The full amount you want saved up for this, in total — not a monthly amount"></div>'+
-        '<div class="field" style="flex:1; margin-bottom:0;"><label>Monthly</label><input type="number" min="0" step="10" data-goal-monthly="'+g.id+'" value="'+g.monthly+'" title="How much you plan to add toward this goal each month"></div>'+
+        '<div class="field" style="flex:1; margin-bottom:0;"><label>Saved so far ($)</label><span class="money-field" style="display:flex;"><input type="number" min="0" step="10" data-goal-saved="'+g.id+'" value="'+g.saved+'" title="Fix this directly if the running total is ever wrong — no need to zero it out and re-add funds"></span></div>'+
+        '<div class="field" style="flex:1; margin-bottom:0;"><label>Total goal ($)</label><span class="money-field" style="display:flex;"><input type="number" min="1" step="50" data-goal-target="'+g.id+'" value="'+g.goal+'" title="The full dollar amount you want saved up for this, in total — not a monthly amount"></span></div>'+
+        '<div class="field" style="flex:1; margin-bottom:0;"><label>Target date</label><input type="month" data-goal-target-date="'+g.id+'" value="'+g.targetDate+'" title="When you want to have the full goal saved by"></div>'+
       '</div>'+
+      '<div class="goal-required-note">'+goalMsg+'</div>'+
       '<div class="hstack" style="gap:8px;"><input type="number" min="0" step="10" placeholder="Add funds" data-goal-add="'+g.id+'" style="flex:1;"><button class="btn btn-sm btn-primary" data-goal-submit="'+g.id+'">Add</button></div>'+
     '</div>';
   }).join('');
@@ -2341,9 +2405,9 @@ function renderSavings(){
     '<div class="card card-pad">'+
       addForm('add-goal', 'Add a savings goal', [
         {name:'name', ph:'Goal name', type:'text'},
-        {name:'goal', ph:'Total amount you want saved', type:'number'},
-        {name:'monthly', ph:'Monthly contribution', type:'number'},
-        {name:'saved', ph:'Already saved (optional)', type:'number'}
+        {name:'goal', ph:'Total amount you want saved', type:'number', money:true},
+        {name:'targetDate', ph:'Target date', type:'month'},
+        {name:'saved', ph:'Already saved (optional)', type:'number', money:true}
       ], 'Add goal')+
     '</div>'+
   '</div>';
@@ -2458,12 +2522,17 @@ function renderDataTab(){
   var hhName = state.household ? state.household.name : 'this household';
   return '<div class="card card-pad" style="margin-bottom:16px;">'+
       '<div class="card-title">This household</div>'+
-      '<p class="faint" style="margin:6px 0 0;">You\'re currently viewing <strong>'+esc(hhName)+'</strong>. "Clear all data" below only affects this household — your other households (if any) are untouched.</p>'+
+      '<p class="faint" style="margin:6px 0 0;">You\'re currently viewing <strong>'+esc(hhName)+'</strong>. Exporting and "Delete all data" below only affect this household — your other households (if any) are untouched.</p>'+
+    '</div>'+
+    '<div class="card card-pad" style="margin-bottom:16px;">'+
+      '<div class="hstack" style="gap:8px; align-items:center;">'+ic('download')+'<div class="card-title" style="margin:0;">Export your data</div></div>'+
+      '<p class="faint" style="margin:6px 0 14px;">Download everything in <strong>'+esc(hhName)+'</strong> — bills, income, transactions, savings goals, debts, net worth and settings — as one JSON file you can keep as a backup or move elsewhere. For just the transaction list as a spreadsheet, use "Download CSV" on the Overview page instead.</p>'+
+      '<button class="btn" id="export-all-data-btn">'+ic('download')+' Export all data (JSON)</button>'+
     '</div>'+
     '<div class="card card-pad" style="border-color:var(--negative);">'+
       '<div class="hstack" style="gap:8px; align-items:center;">'+ic('trash')+'<div class="card-title" style="margin:0; color:var(--negative);">Danger zone</div></div>'+
-      '<p class="faint" style="margin:6px 0 14px;">Permanently erases every bill, goal, transaction, budget line, debt and account in <strong>'+esc(hhName)+'</strong> and starts it blank — the household name and currency stay the same. This can\'t be undone'+(currentUser?', and it clears the copy in your cloud account too.':' on this device.')+'</p>'+
-      '<button class="btn" id="clear-data-btn" style="border-color:var(--negative); color:var(--negative);">'+ic('trash')+' Clear all data</button>'+
+      '<p class="faint" style="margin:6px 0 14px;">Permanently erases every bill, goal, transaction, budget line, debt and account in <strong>'+esc(hhName)+'</strong> and starts it blank — the household name and currency stay the same. This can\'t be undone'+(currentUser?', and it clears the copy in your cloud account too.':' on this device.')+' Consider exporting your data above first.</p>'+
+      '<button class="btn" id="clear-data-btn" style="border-color:var(--negative); color:var(--negative);">'+ic('trash')+' Delete all data</button>'+
     '</div>';
 }
 
@@ -2493,32 +2562,31 @@ function confirmDelete(message, onConfirm){
   document.getElementById('confirm-delete-yes').addEventListener('click', function(){ close(); onConfirm(); });
 }
 
+// Deliberately a single, plain Cancel/Confirm step (not a type-DELETE gate) — the button that opens
+// this already lives behind a "Danger zone" card the user has to scroll to and read, so a second
+// friction layer on top just slows down the one person who actually meant to click it.
 function openClearDataModal(){
   if (document.getElementById('clear-data-modal-backdrop')) return;
-  var hhName = state.household ? state.household.name : 'this household';
   var back = document.createElement('div');
   back.className = 'auth-modal-backdrop';
   back.id = 'clear-data-modal-backdrop';
   back.innerHTML = '<div class="auth-modal">'+
     '<button class="close-x" id="clear-data-modal-close" type="button" aria-label="Close">&times;</button>'+
-    '<h3>Clear all data?</h3>'+
-    '<p class="faint" style="margin:6px 0 16px;">This permanently erases every bill, goal, transaction, budget line, debt and account in <strong>'+esc(hhName)+'</strong>. There\'s no undo. Type <strong>DELETE</strong> to confirm.</p>'+
-    '<div class="field"><input type="text" id="clear-data-confirm-input" autocomplete="off" placeholder="Type DELETE"></div>'+
-    '<div class="auth-actions" style="margin-top:10px;">'+
+    '<h3>Are you sure you want to delete?</h3>'+
+    '<p class="faint" style="margin:6px 0 16px;">If you press the button, all data will be gone — every bill, goal, transaction, budget line, debt and account. There\'s no undo.</p>'+
+    '<div class="auth-actions">'+
       '<button type="button" class="btn" id="clear-data-cancel">Cancel</button>'+
-      '<button type="button" class="btn btn-primary" id="clear-data-confirm" disabled style="background:var(--negative); border-color:var(--negative); color:#fff;">Clear all data</button>'+
+      '<button type="button" class="btn btn-primary" id="clear-data-confirm" style="background:var(--negative); border-color:var(--negative); color:#fff;">Delete all data</button>'+
     '</div>'+
   '</div>';
   document.body.appendChild(back);
   var closeBtn = document.getElementById('clear-data-modal-close');
   var cancelBtn = document.getElementById('clear-data-cancel');
   var confirmBtn = document.getElementById('clear-data-confirm');
-  var input = document.getElementById('clear-data-confirm-input');
   function close(){ var b = document.getElementById('clear-data-modal-backdrop'); if (b) b.remove(); }
   if (closeBtn) closeBtn.addEventListener('click', close);
   if (cancelBtn) cancelBtn.addEventListener('click', close);
   back.addEventListener('click', function(e){ if (e.target===back) close(); });
-  input.addEventListener('input', function(){ confirmBtn.disabled = input.value.trim().toUpperCase() !== 'DELETE'; });
   confirmBtn.addEventListener('click', function(){ close(); clearAllData(); });
 }
 
@@ -3167,7 +3235,10 @@ function wireView(view){
       }
       if (id==='add-goal'){
         if (!vals.name || !vals.goal){ toast('Enter a name and target amount'); return; }
-        state.savings.push({id:'s'+Date.now(), name:vals.name, goal: Math.max(1, clampMoney(vals.goal) || 1), monthly: clampMoney(vals.monthly), saved: clampMoney(vals.saved), icon:'goal'});
+        var newGoal = {id:'s'+Date.now(), name:vals.name, goal: Math.max(1, clampMoney(vals.goal) || 1), saved: clampMoney(vals.saved), icon:'goal',
+          targetDate: (vals.targetDate && /^\d{4}-\d{2}$/.test(vals.targetDate)) ? vals.targetDate : shiftYm(ymOfDate(TODAY), 12)};
+        newGoal.monthly = goalRequiredMonthly(newGoal);
+        state.savings.push(newGoal);
         persist(); toast('Added ' + vals.name); route();
       }
       if (id==='add-debt'){
@@ -3412,6 +3483,27 @@ function wireView(view){
     if (csvBtn) csvBtn.addEventListener('click', handleCSVFile);
     var pdfBtn = document.getElementById('pdf-read-btn');
     if (pdfBtn) pdfBtn.addEventListener('click', handlePDFFile);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-tx-remove]'), function(btn){
+      btn.addEventListener('click', function(){
+        var id = btn.getAttribute('data-tx-remove');
+        var t = state.transactions.find(function(x){ return x.id===id; });
+        confirmDelete('Remove the '+(t?usd0(t.amount)+' '+esc(t.merchant):'transaction')+' entry'+(t&&t.date?' from '+t.date:'')+'? If this was a bill or loan payment, it goes back to unpaid.', function(){
+          state.transactions = state.transactions.filter(function(x){ return x.id!==id; });
+          persist(); toast('Transaction removed'); route();
+        });
+      });
+    });
+    var deleteAllBtn = document.getElementById('tx-delete-all-btn');
+    if (deleteAllBtn) deleteAllBtn.addEventListener('click', function(){
+      var ym = state.month;
+      var monthTx = txForMonth(ym);
+      var count = monthTx.length;
+      confirmDelete('Delete all '+count+' transaction'+(count===1?'':'s')+' shown for '+monthLabel(ym)+'? Useful if a statement import read something wrong — any bills or loan payments in this list go back to unpaid. This can\'t be undone.', function(){
+        var idsToRemove = {}; monthTx.forEach(function(t){ idsToRemove[t.id] = true; });
+        state.transactions = state.transactions.filter(function(x){ return !idsToRemove[x.id]; });
+        persist(); toast(count+' transaction'+(count===1?'':'s')+' deleted'); route();
+      });
+    });
   }
 
   if (view==='calendar'){
@@ -3420,8 +3512,16 @@ function wireView(view){
         var billId = el.getAttribute('data-bill-toggle');
         var ym = state.month;
         var existing = billPaidTx(billId, ym);
-        if (existing){ toast('Already marked paid'); return; }
         var bill = state.bills.find(function(b){return b.id===billId;});
+        if (existing){
+          // matches this item's own tooltip ("click to undo") — deleting its paid transaction is the
+          // same action as removing it from the Transactions table, just reachable from the calendar too.
+          confirmDelete('Mark '+esc(bill?bill.name:'this bill')+' as unpaid again? This removes its paid transaction.', function(){
+            state.transactions = state.transactions.filter(function(x){ return x.id!==existing.id; });
+            persist(); toast((bill?bill.name:'Bill')+' marked unpaid'); route();
+          });
+          return;
+        }
         var day = el.getAttribute('data-day');
         state.transactions.push({id:'t'+Date.now(), date: ym+'-'+String(day).padStart(2,'0'), merchant:bill.name, category:bill.name, amount:bill.budgeted, type:'bill', billId:bill.id, account:'acc-checking', auto:false});
         persist(); toast(bill.name+' marked paid'); route();
@@ -3431,8 +3531,15 @@ function wireView(view){
       el.addEventListener('click', function(){
         var debtId = el.getAttribute('data-debt-toggle');
         var ym = state.month;
-        if (debtPaidTx(debtId, ym)){ toast('Already marked paid'); return; }
+        var existingDebtTx = debtPaidTx(debtId, ym);
         var d = debtById(debtId);
+        if (existingDebtTx){
+          confirmDelete('Mark '+esc(d?d.name:'this loan')+'\'s payment as unpaid again? This removes its paid transaction.', function(){
+            state.transactions = state.transactions.filter(function(x){ return x.id!==existingDebtTx.id; });
+            persist(); toast((d?d.name:'Loan')+' payment marked unpaid'); route();
+          });
+          return;
+        }
         var day = el.getAttribute('data-day');
         state.transactions.push({id:'t'+Date.now(), date: ym+'-'+String(day).padStart(2,'0'), merchant:d.name+' payment', category:d.name, amount:d.minPayment, type:'debt', debtId:d.id, account:'acc-checking', auto:false});
         persist(); toast(d.name+' payment marked paid'); route();
@@ -3493,10 +3600,12 @@ function wireView(view){
         persist(); route();
       });
     });
-    Array.prototype.forEach.call(document.querySelectorAll('[data-goal-monthly]'), function(inp){
+    Array.prototype.forEach.call(document.querySelectorAll('[data-goal-target-date]'), function(inp){
       inp.addEventListener('change', function(){
-        var g = savingsById(inp.getAttribute('data-goal-monthly')); if (!g) return;
-        g.monthly = clampMoney(inp.value);
+        var g = savingsById(inp.getAttribute('data-goal-target-date')); if (!g) return;
+        if (!/^\d{4}-\d{2}$/.test(inp.value)) return;
+        g.targetDate = inp.value;
+        g.monthly = goalRequiredMonthly(g);
         persist(); route();
       });
     });
@@ -3573,6 +3682,8 @@ function wireView(view){
     }
     var clearBtn = document.getElementById('clear-data-btn');
     if (clearBtn) clearBtn.addEventListener('click', openClearDataModal);
+    var exportAllBtn = document.getElementById('export-all-data-btn');
+    if (exportAllBtn) exportAllBtn.addEventListener('click', exportAllData);
   }
 
 }
