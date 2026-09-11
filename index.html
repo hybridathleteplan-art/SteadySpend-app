@@ -401,6 +401,8 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 .goal-ring-info .goal-title{margin-bottom:2px;}
 .goal-required-note{font-size:12.5px; color:var(--ink-soft); background:var(--surface-2); border-radius:10px; padding:10px 12px; line-height:1.4;}
 .goal-required-note strong{color:var(--ink); font-family:var(--font-mono);}
+.goal-required-note.goal-note-overdue{color:var(--negative); background:var(--negative-soft);}
+.goal-required-note.goal-note-overdue strong{color:var(--negative);}
 
 /* ============ DEBT ============ */
 .debt-row{display:flex; align-items:center; gap:14px; padding:16px 0; border-bottom:1px solid var(--line);}
@@ -1077,9 +1079,16 @@ function goalMonthsRemaining(g){
   var months = monthsBetweenYm(ymOfDate(TODAY), g.targetDate);
   return Math.max(1, months);
 }
+// A target date is only "passed" once it's an earlier month than the current one — the target month
+// itself (0 months out) still means "due this month," not overdue, so it keeps a normal monthly figure.
+function goalDatePassed(g){
+  return monthsBetweenYm(ymOfDate(TODAY), g.targetDate) < 0;
+}
 function goalRequiredMonthly(g){
   var remaining = Math.max(0, g.goal - g.saved);
-  return remaining>0 ? Math.ceil(remaining/goalMonthsRemaining(g)) : 0;
+  if (remaining<=0) return 0;
+  if (goalDatePassed(g)) return 0; // date already passed — nothing sensible to divide by; surfaced as a warning instead, not a monthly $ figure
+  return Math.ceil(remaining/goalMonthsRemaining(g));
 }
 // Recomputes every goal's required monthly contribution from its target date — called once per route()
 // so ANY page reading g.monthly (Overview insights, Budget summary, Savings itself) always sees a fresh
@@ -2418,7 +2427,9 @@ function renderSavings(){
     var ringColor = ratio>=100 ? 'var(--positive)' : 'var(--accent)';
     var goalMsg = remaining<=0
       ? 'Goal reached — nice work!'
-      : 'To reach your goal by '+eta+' you need to put in <strong>'+usd0(g.monthly)+' a month</strong> from now on.';
+      : (goalDatePassed(g)
+        ? 'Target date of <strong>'+eta+'</strong> has already passed — update the date above to see what you need to save each month.'
+        : 'To reach your goal by '+eta+' you need to put in <strong>'+usd0(g.monthly)+' a month</strong> from now on.');
     return '<div class="card goal-card">'+
       '<div class="hstack" style="justify-content:space-between; align-items:flex-start;">'+
         '<div class="goal-ring-row">'+
@@ -2433,7 +2444,7 @@ function renderSavings(){
         '<div class="field" style="flex:1; margin-bottom:0;"><label>Total goal ($)</label><span class="money-field" style="display:flex;"><input type="number" min="1" step="50" data-goal-target="'+g.id+'" value="'+g.goal+'" title="The full dollar amount you want saved up for this, in total — not a monthly amount"></span></div>'+
         '<div class="field" style="flex:1; margin-bottom:0;"><label>Target date</label><input type="month" data-goal-target-date="'+g.id+'" value="'+g.targetDate+'" title="When you want to have the full goal saved by"></div>'+
       '</div>'+
-      '<div class="goal-required-note">'+goalMsg+'</div>'+
+      '<div class="goal-required-note'+(remaining>0 && goalDatePassed(g) ? ' goal-note-overdue' : '')+'">'+goalMsg+'</div>'+
       '<div class="hstack" style="gap:8px;"><input type="number" min="0" step="10" placeholder="Add funds" data-goal-add="'+g.id+'" style="flex:1;"><button class="btn btn-sm btn-primary" data-goal-submit="'+g.id+'">Add</button></div>'+
     '</div>';
   }).join('');
@@ -2578,7 +2589,12 @@ function renderDataTab(){
 // clear-all-data modal above, since accidentally removing one bill is recoverable-by-re-adding,
 // but shouldn't happen from one stray click either.
 function confirmDelete(message, onConfirm){
-  if (document.getElementById('confirm-delete-backdrop')) return;
+  // Self-heal instead of silently no-op'ing: if a previous confirm dialog somehow never got cleaned up,
+  // a plain early-return here would make EVERY delete button in the app look broken forever (nothing
+  // would ever open again) with no visible error. Clearing it out first means one delete action can
+  // never permanently wedge every other one.
+  var existingBackdrop = document.getElementById('confirm-delete-backdrop');
+  if (existingBackdrop) existingBackdrop.remove();
   var back = document.createElement('div');
   back.className = 'auth-modal-backdrop';
   back.id = 'confirm-delete-backdrop';
@@ -3386,7 +3402,10 @@ function paintCharts(view){
 function toast(msg){
   var t = document.createElement('div');
   t.textContent = msg;
-  t.style.cssText = 'position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--bg); padding:10px 18px; border-radius:10px; font-size:13px; z-index:999; box-shadow:var(--shadow);';
+  // pointer-events:none is deliberate — this is a passive notice with nothing to click, and without it the
+  // toast could sit on top of whatever's underneath (e.g. a just-added card's own buttons) for its ~2.6s
+  // and silently swallow the click, making a freshly-added item's controls seem broken right after adding.
+  t.style.cssText = 'position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--bg); padding:10px 18px; border-radius:10px; font-size:13px; z-index:999; box-shadow:var(--shadow); pointer-events:none;';
   document.body.appendChild(t);
   setTimeout(function(){ t.remove(); }, 2600);
 }
