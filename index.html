@@ -276,6 +276,10 @@ button{font-family:inherit;}
 .btn-ghost:hover{background:var(--surface-2);}
 .btn-sm{padding:5px 10px; font-size:12px; border-radius:8px;}
 .btn:disabled{opacity:.5; cursor:default;}
+/* A real tap target for every "remove this" (×) button — the old inline padding:2px 8px; font-size:15px
+   sized down to roughly 19x31px, well under any comfortable touch target, which made these easy to miss
+   on a phone (especially right after adding something new and immediately trying to remove it). */
+.remove-x-btn{min-width:34px; min-height:34px; display:inline-flex; align-items:center; justify-content:center; padding:0; font-size:19px; line-height:1; flex:none; border-radius:8px;}
 input,select,textarea{
   font-family:var(--font-body); font-size:13.5px; color:var(--ink); background:var(--surface);
   border:1px solid var(--line); border-radius:9px; padding:8px 10px; width:100%; min-width:0;
@@ -474,10 +478,18 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
    comes from a CSS variable (defaulting to "$") so it automatically follows whichever currency is
    actually selected — the household's base currency almost everywhere, or a per-field override (see
    the Transactions "Add a transaction" amount field, which can be a different currency per entry). */
+/* The currency symbol used to be an absolutely-positioned overlay with a fixed 22px reserved gap —
+   fine for a single-character "$", but multi-character currencies ("CA$", "CHF", "MX$", "kr"...) simply
+   didn't fit in that gap and visually ran straight into the number, making both unreadable together.
+   Rebuilt as a real flex layout instead: the currency gets its own clearly-bordered chip that sizes
+   itself to whatever text it holds, and the number sits in its own space right next to it — one big,
+   unambiguous rectangle, split into a labeled currency side and a number side, never overlapping. */
 :root{ --money-symbol:'$'; }
-.money-field{position:relative; display:inline-flex; flex:none;}
-.money-field:before{content:var(--money-symbol); position:absolute; left:8px; top:50%; transform:translateY(-50%); color:var(--ink-faint); font-size:12.5px; font-weight:600; pointer-events:none; white-space:nowrap;}
-.money-field input{padding-left:22px !important;}
+.money-field{display:inline-flex; align-items:stretch; flex:none; border:1px solid var(--line); border-radius:9px; background:var(--surface);}
+.money-field:before{content:var(--money-symbol); display:flex; align-items:center; flex:none; padding:0 10px; background:var(--surface-2); color:var(--ink-soft); font-size:12.5px; font-weight:700; white-space:nowrap; border-right:1px solid var(--line); border-radius:8px 0 0 8px;}
+.money-field input{border:none !important; background:transparent !important; border-radius:0 !important; padding-left:10px !important; flex:1 1 auto; min-width:0;}
+.money-field:focus-within{outline:2px solid var(--accent); outline-offset:1px;}
+.money-field input:focus{outline:none;}
 
 /* ============ ALERTS ============ */
 .alert-banner{display:flex; align-items:flex-start; gap:10px; padding:11px 15px; border-radius:var(--radius-m); font-size:12.8px; font-weight:600; line-height:1.4;}
@@ -692,7 +704,8 @@ function blankHouseholdState(name){
       {id:'v1', name:'Groceries', budgeted:0}, {id:'v2', name:'Dining Out', budgeted:0}, {id:'v3', name:'Transportation', budgeted:0}
     ], savings:[], debts:[], accounts:[],
     transactions:[], netWorth:{assets:[], liabilities:[], history:[]},
-    monthlyHistory:{labels:[], income:[], expenses:[]}, debtMethod:'avalanche', debtExtra:0
+    monthlyHistory:{labels:[], income:[], expenses:[]}, debtMethod:'avalanche', debtExtra:0,
+    customCategoryEmoji:{} // user-chosen emoji for categories they typed themselves — see categoryEmoji()
   };
 }
 function hhIndexLoad(){
@@ -802,7 +815,11 @@ function renderCurrencySwitcher(){
     var next = this.value;
     if (next === state.baseCurrency) return;
     state.baseCurrency = next;
-    persist(); route();
+    persist();
+    // Updates --money-symbol right away — without this, every $-field on the page kept showing the OLD
+    // currency's symbol until the next full page reload, since route() alone never touches that variable.
+    renderCurrencySwitcher();
+    route();
     toast('Household currency set to '+next);
   });
 }
@@ -2009,7 +2026,7 @@ function billRow(b){
         '<input type="text" data-bill-field="name" data-bill-id="'+b.id+'" value="'+esc(b.name)+'" style="font-weight:600; flex:1; min-width:70px;">'+
         statusPill+
       '</div>'+
-      '<button class="btn btn-ghost btn-sm" data-bill-remove="'+b.id+'" title="Remove bill" style="padding:2px 8px; font-size:15px; line-height:1; flex:none;">&times;</button>'+
+      '<button class="btn btn-ghost remove-x-btn" data-bill-remove="'+b.id+'" title="Remove bill">&times;</button>'+
     '</div>'+
     '<div class="hstack" style="gap:8px; margin-top:6px; flex-wrap:wrap;">'+
       '<select data-bill-field="frequency" data-bill-id="'+b.id+'" style="width:auto; flex:none;">'+
@@ -2034,7 +2051,7 @@ function renderBudget(){
     var barClass = ratio>1 ? 'over' : (ratio>0.85?'':'good');
     var shareOfTotal = (actual>0 && totalActualExpense>0) ? (actual/totalActualExpense*100) : null;
     return '<div class="cat-row">'+
-      '<div class="cat-name"><span class="dot" style="background:'+catChartColor(name)+'"></span>'+esc(name)+'</div>'+
+      '<div class="cat-name"><span class="dot" style="background:'+catChartColor(name)+'"></span>'+categoryEmoji(name)+' '+esc(name)+'</div>'+
       '<div>'+
         '<div class="bar-track"><div class="bar-fill '+barClass+'" style="width:'+clamp(ratio*100,2,100)+'%"></div></div>'+
         '<div class="cat-figures"><span><strong style="color:var(--ink); font-weight:700;">'+usd0(actual)+'</strong> used</span><span>'+pct(ratio*100)+' of '+usd0(budgeted)+(shareOfTotal!=null?' · <strong style="color:var(--ink); font-weight:700;">'+pct(shareOfTotal)+'</strong> of total spending':'')+'</span></div>'+
@@ -2054,7 +2071,7 @@ function renderBudget(){
   var manageHtml = state.variable.map(function(v){
     return '<div class="cat-manage-row" style="grid-template-columns:1fr 30px;">'+
       '<input type="text" data-cat-rename="'+esc(v.name)+'" value="'+esc(v.name)+'">'+
-      '<button class="btn btn-ghost btn-sm" data-cat-remove="'+v.id+'" title="Remove category" style="padding:2px 8px; font-size:15px; line-height:1;">&times;</button>'+
+      '<button class="btn btn-ghost remove-x-btn" data-cat-remove="'+v.id+'" title="Remove category">&times;</button>'+
     '</div>';
   }).join('');
 
@@ -2105,7 +2122,8 @@ function renderBudget(){
       '<div class="divider"></div>'+
       addForm('add-variable', 'Add a variable-expense category', [
         {name:'name', ph:'Category name', type:'text'},
-        {name:'budgeted', ph:'Monthly budget', type:'number'}
+        {name:'budgeted', ph:'Monthly budget', type:'number'},
+        {name:'emoji', ph:'Emoji (optional)', type:'text', title:'Pick an emoji for this category — leave blank to use the standard one'}
       ], 'Add category')+
       '<div class="divider"></div>'+
       '<div class="card-title">Rename or remove a category</div>'+
@@ -2156,7 +2174,7 @@ function incomeRow(i){
     '<div class="hstack" style="justify-content:space-between; gap:8px;">'+
       '<input type="text" data-income-field="name" data-income-id="'+i.id+'" value="'+esc(i.name)+'" placeholder="Source name" style="font-weight:600; flex:1; min-width:0;">'+
       '<span class="mono faint" style="font-size:12px; white-space:nowrap; flex:none;" title="Monthly equivalent — this is what counts toward your planned income total">'+usd0(incomeMonthlyEquivalent(i))+'/mo</span>'+
-      '<button class="btn btn-ghost btn-sm" data-income-remove="'+i.id+'" title="Remove income source" style="padding:2px 8px; font-size:15px; line-height:1; flex:none;">&times;</button>'+
+      '<button class="btn btn-ghost remove-x-btn" data-income-remove="'+i.id+'" title="Remove income source">&times;</button>'+
     '</div>'+
     // Three same-sized labeled fields (Frequency / Amount / Pay day) — consistently sized via flex:1
     // on every field, instead of ad hoc fixed pixel widths that used to make this row look mismatched
@@ -2287,7 +2305,7 @@ function renderTransactions(){
         return '<tr><td class="num" data-label="Date">'+t.date+'</td><td data-label="Merchant"><span class="dot" style="background:'+dotColor+'; margin-right:8px;"></span>'+esc(t.merchant)+(t.auto?' <span class="pill pill-neutral" style="margin-left:4px;">auto</span>':'')+'</td>'+
           '<td data-label="Category">'+categoryEmoji(t.category)+' '+esc(t.category)+'</td><td class="faint" data-label="Note">'+(t.note?esc(t.note):'')+'</td>'+
           '<td class="amt" data-label="Amount" style="color:'+color+'; font-weight:700;">'+sign+' '+fmtTxAmount(t)+'</td>'+
-          '<td class="amt" data-label="Delete"><button class="btn btn-ghost btn-sm" data-tx-remove="'+t.id+'" title="Delete transaction" style="padding:2px 8px; font-size:15px; line-height:1;">&times;</button></td></tr>';
+          '<td class="amt" data-label="Delete"><button class="btn btn-ghost remove-x-btn" data-tx-remove="'+t.id+'" title="Delete transaction">&times;</button></td></tr>';
       }).join('') : '<tr><td colspan="6" class="empty">No transactions yet this month.</td></tr>') +
       '</tbody></table></div></div>'+
   '</div>';
@@ -2371,7 +2389,7 @@ function renderDebt(){
           return '<div class="debt-row" style="align-items:flex-start; flex-wrap:wrap;"><div class="debt-rank">'+(i+1)+'</div>'+
           '<div class="debt-main" style="flex:1 1 260px;">'+
             '<div class="hstack" style="justify-content:space-between;"><div class="debt-name">'+esc(d.name)+'</div>'+
-            '<button class="btn btn-ghost btn-sm" data-debt-remove="'+d.id+'" title="Remove this debt" style="padding:2px 8px; font-size:15px; line-height:1;">&times;</button></div>'+
+            '<button class="btn btn-ghost remove-x-btn" data-debt-remove="'+d.id+'" title="Remove this debt">&times;</button></div>'+
             '<div class="form-row" style="grid-template-columns:repeat(3,minmax(80px,110px)); margin-top:6px;">'+
               '<div class="field"><label>Balance</label><input type="number" min="0" step="1" class="mono" data-debt-field="balance" data-debt-id="'+d.id+'" value="'+d.balance+'"></div>'+
               '<div class="field"><label>APR %</label><input type="number" min="0" step="0.1" class="mono" data-debt-field="apr" data-debt-id="'+d.id+'" value="'+d.apr+'"></div>'+
@@ -2436,13 +2454,13 @@ function renderSavings(){
           '<div class="progress-ring-wrap">'+progressRing(ratio, ringColor, 72)+'<div class="progress-ring-label">'+Math.round(ratio)+'%</div></div>'+
           '<div class="goal-ring-info"><div class="goal-title">'+esc(g.name)+'</div><div class="goal-sub">target: '+eta+'</div></div>'+
         '</div>'+
-        '<button class="btn btn-ghost btn-sm" data-goal-remove="'+g.id+'" title="Remove goal" style="padding:2px 8px; font-size:15px; line-height:1; flex:none;">&times;</button>'+
+        '<button class="btn btn-ghost remove-x-btn" data-goal-remove="'+g.id+'" title="Remove goal">&times;</button>'+
       '</div>'+
       '<div class="goal-figures"><span class="goal-saved">'+usd0(g.saved)+'</span><span class="goal-goal">saved of '+usd0(g.goal)+' total goal</span></div>'+
-      '<div class="hstack" style="gap:8px;">'+
-        '<div class="field" style="flex:1; margin-bottom:0;"><label>Saved so far ($)</label><span class="money-field" style="display:flex;"><input type="number" min="0" step="10" data-goal-saved="'+g.id+'" value="'+g.saved+'" title="Fix this directly if the running total is ever wrong — no need to zero it out and re-add funds"></span></div>'+
-        '<div class="field" style="flex:1; margin-bottom:0;"><label>Total goal ($)</label><span class="money-field" style="display:flex;"><input type="number" min="1" step="50" data-goal-target="'+g.id+'" value="'+g.goal+'" title="The full dollar amount you want saved up for this, in total — not a monthly amount"></span></div>'+
-        '<div class="field" style="flex:1; margin-bottom:0;"><label>Target date</label><input type="month" data-goal-target-date="'+g.id+'" value="'+g.targetDate+'" title="When you want to have the full goal saved by"></div>'+
+      '<div class="hstack" style="gap:8px; flex-wrap:wrap;">'+
+        '<div class="field" style="flex:1; min-width:118px; margin-bottom:0;"><label>Saved so far</label><span class="money-field" style="display:flex;"><input type="number" min="0" step="10" data-goal-saved="'+g.id+'" value="'+g.saved+'" title="Fix this directly if the running total is ever wrong — no need to zero it out and re-add funds"></span></div>'+
+        '<div class="field" style="flex:1; min-width:118px; margin-bottom:0;"><label>Total goal</label><span class="money-field" style="display:flex;"><input type="number" min="1" step="50" data-goal-target="'+g.id+'" value="'+g.goal+'" title="The full dollar amount you want saved up for this, in total — not a monthly amount"></span></div>'+
+        '<div class="field" style="flex:1; min-width:118px; margin-bottom:0;"><label>Target date</label><input type="month" data-goal-target-date="'+g.id+'" value="'+g.targetDate+'" title="When you want to have the full goal saved by"></div>'+
       '</div>'+
       '<div class="goal-required-note'+(remaining>0 && goalDatePassed(g) ? ' goal-note-overdue' : '')+'">'+goalMsg+'</div>'+
       '<div class="hstack" style="gap:8px;"><input type="number" min="0" step="10" placeholder="Add funds" data-goal-add="'+g.id+'" style="flex:1;"><button class="btn btn-sm btn-primary" data-goal-submit="'+g.id+'">Add</button></div>'+
@@ -2482,7 +2500,7 @@ function renderNetWorth(){
     return '<div class="bill-row">'+
       '<div class="hstack" style="justify-content:space-between; gap:8px;">'+
         '<input type="text" data-asset-field="name" data-asset-idx="'+idx+'" value="'+esc(a.name)+'" style="font-weight:600; flex:1; min-width:0;">'+
-        '<button class="btn btn-ghost btn-sm" data-asset-remove="'+idx+'" title="Remove asset" style="padding:2px 8px; font-size:15px; line-height:1; flex:none;">&times;</button>'+
+        '<button class="btn btn-ghost remove-x-btn" data-asset-remove="'+idx+'" title="Remove asset">&times;</button>'+
       '</div>'+
       '<div class="hstack" style="gap:10px; margin-top:6px; flex-wrap:wrap; align-items:flex-end;">'+
         '<div class="field" style="flex:none;"><label style="font-size:10px; margin-bottom:3px;">Current value</label><input type="number" step="1" data-asset-field="value" data-asset-idx="'+idx+'" value="'+a.value+'" style="width:110px;"></div>'+
@@ -2494,7 +2512,7 @@ function renderNetWorth(){
     return '<div class="cat-manage-row" style="grid-template-columns:1fr 130px 30px;">'+
       '<input type="text" data-liab-field="name" data-liab-idx="'+idx+'" value="'+esc(l.name)+'">'+
       '<input type="number" step="1" data-liab-field="value" data-liab-idx="'+idx+'" value="'+l.value+'">'+
-      '<button class="btn btn-ghost btn-sm" data-liab-remove="'+idx+'" title="Remove" style="padding:2px 8px; font-size:15px; line-height:1;">&times;</button>'+
+      '<button class="btn btn-ghost remove-x-btn" data-liab-remove="'+idx+'" title="Remove">&times;</button>'+
     '</div>';
   }
 
@@ -2751,13 +2769,21 @@ var csvImportRows = [], csvImportHeaders = [], csvImportMap = {date:-1, merchant
 var csvAmountSignMode = 'negative-expense'; // 'negative-expense' | 'positive-expense'
 function parseAmountForSign(raw){ return parseFloat(String(raw||'').replace(/[$,]/g,'').trim()); }
 function isIncomeForAmount(amt){ return csvAmountSignMode==='positive-expense' ? amt<0 : amt>=0; }
-// If NONE of the parsed amounts in the current mapping are negative, the statement almost certainly
+// If most of the parsed amounts in the current mapping aren't negative, the statement almost certainly
 // doesn't use a minus sign for spending at all (a very common shape for credit-card exports and PDFs) —
 // so default the toggle to "positive = expense" automatically instead of making every row look like income.
+// This is a MAJORITY vote on purpose, not "any negative found" — a real statement is overwhelmingly one
+// convention with maybe one or two exceptions (a refund, a credited fee, a stray negative), and letting a
+// single outlier flip the whole file used to mislabel the vast majority of real expenses as income.
 function autoDetectAmountSignMode(){
   if (csvImportMap.amount<0 || !csvImportRows.length) return;
-  var sawNegative = csvImportRows.some(function(r){ var a = parseAmountForSign(r[csvImportMap.amount]); return !isNaN(a) && a<0; });
-  csvAmountSignMode = sawNegative ? 'negative-expense' : 'positive-expense';
+  var neg=0, pos=0;
+  csvImportRows.forEach(function(r){
+    var a = parseAmountForSign(r[csvImportMap.amount]);
+    if (isNaN(a) || a===0) return;
+    if (a<0) neg++; else pos++;
+  });
+  csvAmountSignMode = pos>neg ? 'positive-expense' : 'negative-expense';
 }
 function parseCSV(text){
   // minimal RFC4180-ish parser: handles quoted fields, escaped quotes, and commas/newlines inside quotes
@@ -2870,9 +2896,23 @@ var CATEGORY_EMOJI = {
   'vacation':'✈️', 'travel':'✈️', 'education':'🎓', 'gifts':'🎁', 'health':'🩺', 'fitness':'🏋️',
   'pets':'🐾', 'kids':'🧒', 'subscriptions':'🔁', 'other':'🏷️'
 };
+// A user picking their own emoji for a category they typed themselves is a per-household preference
+// (not a code-level default), so it's stored on state, not in the CATEGORY_EMOJI constant above.
+// Lazily created so it survives loading an older saved state that predates this feature.
+function customCatEmojiMap(){ return state.customCategoryEmoji || (state.customCategoryEmoji = {}); }
+function setCustomCategoryEmoji(name, emoji){
+  name = String(name||'').trim(); emoji = String(emoji||'').trim();
+  if (!name) return;
+  var map = customCatEmojiMap();
+  if (emoji) map[name] = emoji; else delete map[name]; // no emoji chosen -> fall back to the standard one for everyone
+  persist();
+}
 function categoryEmoji(name){
-  var key = String(name||'').toLowerCase().trim();
-  if (!key) return '🏷️';
+  var raw = String(name||'').trim();
+  if (!raw) return '🏷️';
+  var custom = customCatEmojiMap()[raw];
+  if (custom) return custom;
+  var key = raw.toLowerCase();
   if (CATEGORY_EMOJI[key]) return CATEGORY_EMOJI[key];
   var found = Object.keys(CATEGORY_EMOJI).find(function(k){ return key.indexOf(k)>=0 || k.indexOf(key)>=0; });
   return found ? CATEGORY_EMOJI[found] : '🏷️';
@@ -2901,25 +2941,43 @@ function categoryPickerHtml(attrName, attrValue, currentValue){
   var current = String(currentValue||'').trim();
   var isCustom = !!current && cats.indexOf(current) < 0;
   var options = cats.map(function(c){ return '<option value="'+esc(c)+'"'+(!isCustom && c===current?' selected':'')+'>'+categoryEmoji(c)+' '+esc(c)+'</option>'; }).join('');
+  var existingEmoji = isCustom ? (customCatEmojiMap()[current] || '') : '';
   return '<select '+attrName+'-select="'+attrValue+'">'+options+'<option value="__custom__"'+(isCustom?' selected':'')+'>✏️ Custom category…</option></select>'+
-    '<input type="text" '+attrName+'-custom="'+attrValue+'" placeholder="Type a category" value="'+(isCustom?esc(current):'')+'" '+(isCustom?'':'hidden')+' style="margin-top:6px;">';
+    '<div '+attrName+'-customwrap="'+attrValue+'" class="hstack" style="gap:6px; margin-top:6px;" '+(isCustom?'':'hidden')+'>'+
+      '<input type="text" '+attrName+'-custom="'+attrValue+'" placeholder="Type a category" value="'+(isCustom?esc(current):'')+'" style="flex:1; min-width:0;">'+
+      '<input type="text" '+attrName+'-emoji="'+attrValue+'" maxlength="4" placeholder="🏷️" value="'+esc(existingEmoji)+'" title="Pick an emoji for this category — leave blank to use the standard one" style="width:52px; flex:none; text-align:center;">'+
+    '</div>';
 }
 // Wires up ALL category pickers on the page at once (both the manual Add Transaction form and any CSV/PDF
-// review rows share this): toggling to "Custom category…" reveals the text field; onChange fires with the
-// resolved category string either way, so callers don't need to know which mode is active.
+// review rows share this): toggling to "Custom category…" reveals the text field (plus an optional emoji
+// field next to it); onChange fires with the resolved category string either way, so callers don't need to
+// know which mode is active. An emoji is entirely optional — leaving it blank keeps the standard one that
+// categoryEmoji() would have picked anyway, it's never required to save a custom category.
 function wireCategoryPickers(root, onChange){
   Array.prototype.forEach.call(root.querySelectorAll('[data-tx-cat-select], [data-csv-cat-select]'), function(sel){
     var attr = sel.hasAttribute('data-tx-cat-select') ? 'data-tx-cat' : 'data-csv-cat';
     var id = sel.getAttribute(attr+'-select');
+    var customWrap = root.querySelector('['+attr+'-customwrap="'+id+'"]');
     var customInput = root.querySelector('['+attr+'-custom="'+id+'"]');
+    var emojiInput = root.querySelector('['+attr+'-emoji="'+id+'"]');
+    function commitEmoji(){
+      if (!customInput || !emojiInput) return;
+      var name = customInput.value.trim();
+      if (name) setCustomCategoryEmoji(name, emojiInput.value);
+    }
     sel.addEventListener('change', function(){
       var isCustom = sel.value === '__custom__';
-      if (customInput){ customInput.hidden = !isCustom; if (isCustom) customInput.focus(); }
+      if (customWrap) customWrap.hidden = !isCustom;
+      if (isCustom && customInput) customInput.focus();
       onChange(id, isCustom ? (customInput?customInput.value.trim():'') : sel.value);
     });
     if (customInput) customInput.addEventListener('input', function(){
       if (sel.value === '__custom__') onChange(id, customInput.value.trim());
     });
+    // Commit the emoji choice (if any) once the user leaves either field — tied to whatever name is
+    // currently typed, so it doesn't matter which order the two fields are filled in.
+    if (emojiInput) emojiInput.addEventListener('change', commitEmoji);
+    if (customInput) customInput.addEventListener('blur', commitEmoji);
   });
 }
 function resolvedCategoryValue(root, attr, id){
@@ -2937,14 +2995,16 @@ function resolvedCategoryValue(root, attr, id){
 function setCategoryPickerValue(root, attr, id, value){
   var sel = root.querySelector('['+attr+'-select="'+id+'"]');
   if (!sel) return;
+  var customWrap = root.querySelector('['+attr+'-customwrap="'+id+'"]');
   var customInput = root.querySelector('['+attr+'-custom="'+id+'"]');
   var hasOption = Array.prototype.some.call(sel.options, function(o){ return o.value===value; });
   if (hasOption){
     sel.value = value;
-    if (customInput) customInput.hidden = true;
+    if (customWrap) customWrap.hidden = true;
   } else {
     sel.value = '__custom__';
-    if (customInput){ customInput.hidden = false; customInput.value = value; }
+    if (customWrap) customWrap.hidden = false;
+    if (customInput) customInput.value = value;
   }
 }
 function guessColumn(headers, candidates){
@@ -2957,6 +3017,17 @@ function guessColumn(headers, candidates){
     for (var k=0;k<candidates.length;k++){ if (lower[j].indexOf(candidates[k])>=0) return j; }
   }
   return -1;
+}
+// Backs out of an in-progress CSV/PDF import at any stage (column mapping or row review) without
+// adding anything — nothing was ever written to state.transactions until the Import button is clicked,
+// so "cancel" just means throwing away what's been read and resetting the file pickers.
+function cancelImportFlow(){
+  csvImportRows = []; csvImportHeaders = []; csvImportMap = {date:-1, merchant:-1, amount:-1}; csvReviewRows = [];
+  var mapEl = document.getElementById('csv-mapping'); if (mapEl) mapEl.innerHTML = '';
+  var statusEl = document.getElementById('csv-status'); if (statusEl) statusEl.textContent = '';
+  var csvFile = document.getElementById('csv-file'); if (csvFile) csvFile.value = '';
+  var pdfFile = document.getElementById('pdf-file'); if (pdfFile) pdfFile.value = '';
+  toast('Import cancelled — nothing was added');
 }
 function handleCSVFile(){
   var fileInput = document.getElementById('csv-file');
@@ -3000,7 +3071,7 @@ function renderCSVMapping(){
       '</select>'+
       '<div class="faint" style="margin-top:4px; font-size:11.5px;">We guessed based on the numbers in this file — flip it if your categories below look backwards (e.g. everyday purchases showing up as income).</div>'+
     '</div>'+
-    '<div style="margin-top:10px;"><button class="btn btn-primary" id="csv-preview-btn">Preview rows</button></div>'+
+    '<div class="hstack" style="gap:8px; margin-top:10px;"><button class="btn btn-primary" id="csv-preview-btn">Preview rows</button><button class="btn btn-ghost" id="csv-mapping-cancel-btn" type="button">Cancel</button></div>'+
     '<div id="csv-review"></div>';
   Array.prototype.forEach.call(mapEl.querySelectorAll('[data-csv-map]'), function(sel){
     sel.addEventListener('change', function(){
@@ -3019,6 +3090,8 @@ function renderCSVMapping(){
   });
   var btn = document.getElementById('csv-preview-btn');
   if (btn) btn.addEventListener('click', renderCSVReview);
+  var mappingCancelBtn = document.getElementById('csv-mapping-cancel-btn');
+  if (mappingCancelBtn) mappingCancelBtn.addEventListener('click', cancelImportFlow);
 }
 function normalizeCSVDate(raw){
   raw = String(raw||'').trim();
@@ -3064,7 +3137,7 @@ function renderCSVReview(){
       '</div>';
     }).join('') +
     '</div>'+
-    '<div style="margin-top:10px;"><button class="btn btn-primary" id="csv-import-btn">Import selected transactions</button></div>';
+    '<div class="hstack" style="gap:8px; margin-top:10px;"><button class="btn btn-primary" id="csv-import-btn">Import selected transactions</button><button class="btn btn-ghost" id="csv-review-cancel-btn" type="button">Cancel</button></div>';
   Array.prototype.forEach.call(reviewEl.querySelectorAll('[data-csv-check]'), function(cb){
     cb.addEventListener('change', function(){ var r = csvReviewRows.find(function(x){ return x.id===cb.getAttribute('data-csv-check'); }); if (r) r.checked = cb.checked; });
   });
@@ -3085,6 +3158,8 @@ function renderCSVReview(){
     csvImportRows = []; csvImportHeaders = []; csvReviewRows = [];
     persist(); toast('Imported '+toAdd.length+' transaction'+(toAdd.length===1?'':'s')+' from CSV'); route();
   });
+  var reviewCancelBtn = document.getElementById('csv-review-cancel-btn');
+  if (reviewCancelBtn) reviewCancelBtn.addEventListener('click', cancelImportFlow);
 }
 
 /* ============================================================
@@ -3444,6 +3519,7 @@ function wireView(view){
       if (id==='add-variable'){
         if (!vals.name || !vals.budgeted) { toast('Enter a name and budget'); return; }
         state.variable.push({id:'v'+Date.now(), name:vals.name, budgeted: clampMoney(vals.budgeted)});
+        if (vals.emoji) setCustomCategoryEmoji(vals.name, vals.emoji); // optional — left blank just keeps the standard emoji for this name
         persist(); toast('Added ' + vals.name); route();
       }
       if (id==='add-goal'){
