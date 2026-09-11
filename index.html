@@ -278,14 +278,16 @@ button{font-family:inherit;}
 .btn:disabled{opacity:.5; cursor:default;}
 input,select,textarea{
   font-family:var(--font-body); font-size:13.5px; color:var(--ink); background:var(--surface);
-  border:1px solid var(--line); border-radius:9px; padding:8px 10px; width:100%;
+  border:1px solid var(--line); border-radius:9px; padding:8px 10px; width:100%; min-width:0;
 }
 input.mono, .num-input{font-family:var(--font-mono);}
 input[type="checkbox"],input[type="radio"]{width:16px; height:16px; padding:0; flex:none; accent-color:var(--accent);}
 input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--accent); outline-offset:1px;}
 label{font-size:12px; font-weight:600; color:var(--ink-soft); display:block; margin-bottom:5px;}
-.field{margin-bottom:0;}
-.form-row{display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); align-items:end;}
+.field{margin-bottom:0; min-width:0;}
+/* min-width:0 above is what lets a date/select field actually shrink inside its grid track instead of
+   forcing the track wider than its share and visually bleeding into the next field on medium widths. */
+.form-row{display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); align-items:end;}
 
 /* ============ LAYOUT PRIMITIVES ============ */
 /* Shadow-only "floating" cards, no hairline border — quieter chrome, more whitespace inside. */
@@ -328,6 +330,20 @@ label{font-size:12px; font-weight:600; color:var(--ink-soft); display:block; mar
 table{width:100%; border-collapse:collapse; font-size:13.3px;}
 th{text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-faint); font-weight:600; padding:0 12px 12px; border-bottom:1px solid var(--line); white-space:nowrap;}
 td{padding:14px 12px; border-bottom:1px solid var(--line); vertical-align:middle;}
+/* Below ~640px, a wide multi-column table is what forces the annoying side-to-side scroll to see the
+   amount/delete columns — so on narrow screens the Transactions table stops being a table at all and
+   becomes a stack of label/value rows per transaction instead (a well-known responsive-table pattern),
+   so every column is visible at once with no horizontal scrolling. */
+@media (max-width:640px){
+  .table-wrap{ overflow-x:visible; }
+  .table-wrap table, .table-wrap tbody, .table-wrap tr, .table-wrap td{ display:block; width:100%; }
+  .table-wrap thead{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+  .table-wrap tr{ border:1px solid var(--line); border-radius:var(--radius-m); margin-bottom:10px; padding:4px 12px; }
+  .table-wrap tr:last-child{ margin-bottom:0; }
+  .table-wrap td{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid var(--line); text-align:right; }
+  .table-wrap td:last-child{ border-bottom:none; }
+  .table-wrap td:before{ content:attr(data-label); font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); font-weight:600; text-align:left; flex:none; }
+}
 tr:last-child td{border-bottom:none;}
 td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums;}
 
@@ -451,11 +467,15 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 .bill-row{padding:10px 0; border-bottom:1px solid var(--line);}
 .bill-row:last-child{border-bottom:none;}
 .bill-row select, .bill-row input[type="number"]{width:auto;}
-/* A "$" glued to the left edge of a money input, so it reads as a dollar amount before you've typed
-   anything — a bare empty number field otherwise gives no hint what unit it wants. */
+/* A currency symbol glued to the left edge of a money input, so it reads as an amount before you've
+   typed anything — a bare empty number field otherwise gives no hint what unit it wants. The symbol
+   comes from a CSS variable (defaulting to "$") so it automatically follows whichever currency is
+   actually selected — the household's base currency almost everywhere, or a per-field override (see
+   the Transactions "Add a transaction" amount field, which can be a different currency per entry). */
+:root{ --money-symbol:'$'; }
 .money-field{position:relative; display:inline-flex; flex:none;}
-.money-field:before{content:'$'; position:absolute; left:8px; top:50%; transform:translateY(-50%); color:var(--ink-faint); font-size:12.5px; font-weight:600; pointer-events:none;}
-.money-field input{padding-left:16px !important;}
+.money-field:before{content:var(--money-symbol); position:absolute; left:8px; top:50%; transform:translateY(-50%); color:var(--ink-faint); font-size:12.5px; font-weight:600; pointer-events:none; white-space:nowrap;}
+.money-field input{padding-left:22px !important;}
 
 /* ============ ALERTS ============ */
 .alert-banner{display:flex; align-items:flex-start; gap:10px; padding:11px 15px; border-radius:var(--radius-m); font-size:12.8px; font-weight:600; line-height:1.4;}
@@ -764,6 +784,9 @@ function renderHouseholdSwitcher(){
 // foreign-currency conversions — it never rewrites amounts already saved on existing bills, budgets
 // or transactions. The inline caption below says this explicitly so nobody expects a retroactive convert.
 function renderCurrencySwitcher(){
+  // Keeps every $-prefixed money field (bills, goals, income, net worth…) showing the HOUSEHOLD's
+  // actual currency symbol instead of a hardcoded "$" — see the --money-symbol variable in template.html.
+  document.documentElement.style.setProperty('--money-symbol', JSON.stringify(ccySymbol(baseCcy())));
   var wrap = document.querySelector('.ccy-switch');
   if (!wrap) return;
   var current = baseCcy();
@@ -2126,18 +2149,23 @@ function incomeRow(i){
       '<span class="mono faint" style="font-size:12px; white-space:nowrap; flex:none;" title="Monthly equivalent — this is what counts toward your planned income total">'+usd0(incomeMonthlyEquivalent(i))+'/mo</span>'+
       '<button class="btn btn-ghost btn-sm" data-income-remove="'+i.id+'" title="Remove income source" style="padding:2px 8px; font-size:15px; line-height:1; flex:none;">&times;</button>'+
     '</div>'+
-    '<div class="hstack" style="gap:8px; margin-top:6px; flex-wrap:wrap; align-items:flex-start;">'+
-      '<select data-income-field="frequency" data-income-id="'+i.id+'" style="width:auto; flex:none;" title="How often this arrives — drives the monthly total and calendar paydays">'+
+    // Three same-sized labeled fields (Frequency / Amount / Pay day) — consistently sized via flex:1
+    // on every field, instead of ad hoc fixed pixel widths that used to make this row look mismatched
+    // (one control noticeably bigger than the next), and each amount now shows its real $ (or household
+    // currency) prefix instead of a bare number that gave no hint what unit it wanted.
+    '<div class="hstack" style="gap:8px; margin-top:8px; flex-wrap:wrap; align-items:flex-start;">'+
+      '<div class="field" style="flex:1; min-width:132px; margin-bottom:0;"><label>Frequency</label><select data-income-field="frequency" data-income-id="'+i.id+'" title="How often this arrives — drives the monthly total and calendar paydays">'+
         Object.keys(INCOME_FREQUENCIES).map(function(k){ return '<option value="'+k+'"'+(k===freq?' selected':'')+'>'+INCOME_FREQUENCIES[k].label+'</option>'; }).join('')+
-      '</select>'+
-      '<div style="flex:none;"><input type="number" min="0" step="1" data-income-field="amount" data-income-id="'+i.id+'" value="'+curAmt+'" style="width:100px;" title="Amount per '+(freq==='monthly'||freq==='variable'?'month':freq==='annually'?'year':'paycheck')+'">'+
-        (freq==='variable' && curAmt===0 && lastKnown>0 ? '<button type="button" class="btn btn-ghost btn-sm" data-income-restore="'+i.id+'" style="padding:1px 6px; font-size:10px; margin-top:3px; white-space:nowrap;" title="Fill in last recorded amount">Restore '+usd0(lastKnown)+'</button>' : '')+
-        (freq==='variable' ? '<div class="faint" style="font-size:10px; margin-top:3px;">this month only</div>' : '')+
+      '</select></div>'+
+      '<div class="field" style="flex:1; min-width:110px; margin-bottom:0;"><label>Amount per '+(freq==='monthly'||freq==='variable'?'month':freq==='annually'?'year':'paycheck')+'</label>'+
+        '<span class="money-field" style="display:flex;"><input type="number" min="0" step="1" data-income-field="amount" data-income-id="'+i.id+'" value="'+curAmt+'"></span>'+
+        (freq==='variable' && curAmt===0 && lastKnown>0 ? '<button type="button" class="btn btn-ghost btn-sm" data-income-restore="'+i.id+'" style="padding:1px 6px; font-size:10px; margin-top:4px; white-space:nowrap;" title="Fill in last recorded amount">Restore '+usd0(lastKnown)+'</button>' : '')+
+        (freq==='variable' ? '<div class="faint" style="font-size:10px; margin-top:4px;">this month only</div>' : '')+
       '</div>'+
       (showDay
-        ? '<div style="flex:none;"><input type="number" min="1" max="31" data-income-field="payDay" data-income-id="'+i.id+'" data-day-input value="'+(i.payDay||1)+'" style="width:64px;" title="'+esc(INCOME_FREQUENCIES[freq].dayNote)+'">'+
-          '<div class="faint mono" data-day-preview style="font-size:10.5px; margin-top:3px; white-space:nowrap;">'+esc(dayPreviewText(i.payDay||1, state.month))+'</div></div>'
-        : '<span class="faint mono" style="font-size:12px; align-self:center;" title="'+esc(INCOME_FREQUENCIES[freq].dayNote)+'">15th &amp; last day</span>')+
+        ? '<div class="field" style="flex:1; min-width:90px; margin-bottom:0;"><label>Pay day</label><input type="number" min="1" max="31" data-income-field="payDay" data-income-id="'+i.id+'" data-day-input value="'+(i.payDay||1)+'" title="'+esc(INCOME_FREQUENCIES[freq].dayNote)+'">'+
+          '<div class="faint mono" data-day-preview style="font-size:10.5px; margin-top:4px; white-space:nowrap;">'+esc(dayPreviewText(i.payDay||1, state.month))+'</div></div>'
+        : '<div class="field" style="flex:1; min-width:120px; margin-bottom:0;"><label>Pay day</label><div class="faint mono" style="padding-top:8px; font-size:12px;" title="'+esc(INCOME_FREQUENCIES[freq].dayNote)+'">15th &amp; last day</div></div>')+
     '</div>'+
   '</div>';
 }
@@ -2168,7 +2196,6 @@ function renderIncome(){
 function renderTransactions(){
   var ym = state.month;
   var tx = txForMonth(ym).slice().sort(function(a,b){ return b.date.localeCompare(a.date); });
-  var allCats = [].concat(state.bills.map(function(b){return b.name;}), state.variable.map(function(v){return v.name;}), ['Freelance Income','Salary','Debt Payment','Savings Transfer']);
   var notedTx = tx.filter(function(t){ return t.note; });
   var notedTxHtml = notedTx.map(function(t){
     var dotColor = t.type==='income' ? 'var(--positive)' : catChartColor(t.category);
@@ -2185,21 +2212,31 @@ function renderTransactions(){
       '<div class="card-title">Add a transaction</div>'+
       '<div class="form-row">'+
         '<div class="field"><label>Date</label><input type="date" id="tx-date" value="'+state.today+'"></div>'+
-        '<div class="field"><label>Merchant</label><input type="text" id="tx-merchant" placeholder="e.g. Trader Joe’s"></div>'+
         '<div class="field"><label>Type</label><select id="tx-type">'+
-          '<option value="variable">Variable expense</option><option value="bill">Bill</option><option value="debt">Debt payment</option>'+
+          '<option value="variable">Variable expense</option><option value="bill">Bill payment</option><option value="debt">Debt / loan payment</option>'+
           '<option value="savings">Savings transfer</option><option value="income">Income</option></select></div>'+
-        '<div class="field"><label>Category</label><input type="text" id="tx-category" placeholder="e.g. Groceries" list="cat-list"></div>'+
-        '<div class="field"><label>Amount</label><div class="fx-row"><select id="tx-currency">'+ Object.keys(CURRENCIES).map(function(c){ return '<option value="'+c+'" '+(c===baseCcy()?'selected':'')+'>'+c+'</option>'; }).join('') +'</select><input type="number" min="0" step="0.01" id="tx-amount" placeholder="0.00"></div></div>'+
-        '<div class="field" style="grid-column:span 2;"><label>Note <span class="faint" style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label><input type="text" id="tx-note" placeholder="e.g. split with roommate, work lunch"></div>'+
-        '<div class="field"><button class="btn btn-primary" id="tx-add-btn">'+ic('plus')+' Add</button></div>'+
+      '</div>'+
+      '<div class="form-row" style="margin-top:12px;">'+
+        '<div class="field"><label>Merchant</label><input type="text" id="tx-merchant" placeholder="e.g. Trader Joe’s"></div>'+
+        '<div class="field"><label>Amount</label><div class="fx-row"><select id="tx-currency">'+ Object.keys(CURRENCIES).map(function(c){ return '<option value="'+c+'" '+(c===baseCcy()?'selected':'')+'>'+c+'</option>'; }).join('') +'</select><span class="money-field" id="tx-amount-money" style="display:flex; flex:1;"><input type="number" min="0" step="0.01" id="tx-amount" placeholder="0.00"></span></div></div>'+
+      '</div>'+
+      '<div class="form-row" id="tx-linked-row" style="margin-top:12px;" hidden>'+
+        '<div class="field" style="grid-column:1/-1;"><label id="tx-linked-label">Which bill is this?</label><select id="tx-linked-select"></select>'+
+          '<div class="faint" style="margin-top:5px; font-size:11px;">Linking it makes sure it\'s correctly marked paid everywhere — Calendar, Overview, and Main Budget. Leave it as “not linked” for a one-off that isn\'t one of your regular bills or loans.</div>'+
+        '</div>'+
+      '</div>'+
+      '<div class="form-row" style="margin-top:12px;">'+
+        '<div class="field" style="grid-column:1/-1;"><label>Category</label>'+categoryPickerHtml('data-tx-cat','1','')+'</div>'+
+      '</div>'+
+      '<div class="form-row" style="margin-top:12px;">'+
+        '<div class="field" style="grid-column:1/-1;"><label>Note <span class="faint" style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label><input type="text" id="tx-note" placeholder="e.g. split with roommate, work lunch"></div>'+
       '</div>'+
       '<div class="hstack" id="tx-fx-row" hidden style="margin-top:10px; gap:8px;">'+
         '<label style="margin:0;">Exchange rate to '+baseCcy()+'</label>'+
         '<input type="number" min="0" step="0.0001" id="tx-fxrate" placeholder="e.g. 1.09" style="width:110px;">'+
       '</div>'+
       '<div class="fx-note" id="tx-fx-note" hidden>We’ll look up today’s rate automatically — you can always edit it.</div>'+
-      '<datalist id="cat-list">'+allCats.map(function(c){ return '<option value="'+esc(c)+'">'; }).join('')+'</datalist>'+
+      '<div style="margin-top:14px;"><button class="btn btn-primary" id="tx-add-btn">'+ic('plus')+' Add transaction</button></div>'+
       '<div class="faint" style="margin-top:8px;">New transactions are auto-tagged “auto-categorized” to mirror bank-sync behavior in the full product.</div>'+
     '</div>'+
     (notedTxHtml ? '<div class="card card-pad" style="margin-bottom:16px;">'+
@@ -2238,10 +2275,10 @@ function renderTransactions(){
         var sign = t.type==='income'?'+':'–';
         var color = t.type==='income'?'var(--positive)':'var(--ink)';
         var dotColor = t.type==='income' ? 'var(--positive)' : catChartColor(t.category);
-        return '<tr><td class="num">'+t.date+'</td><td><span class="dot" style="background:'+dotColor+'; margin-right:8px;"></span>'+esc(t.merchant)+(t.auto?' <span class="pill pill-neutral" style="margin-left:4px;">auto</span>':'')+'</td>'+
-          '<td>'+esc(t.category)+'</td><td class="faint">'+(t.note?esc(t.note):'')+'</td>'+
-          '<td class="amt" style="color:'+color+'; font-weight:700;">'+sign+' '+fmtTxAmount(t)+'</td>'+
-          '<td class="amt"><button class="btn btn-ghost btn-sm" data-tx-remove="'+t.id+'" title="Delete transaction" style="padding:2px 8px; font-size:15px; line-height:1;">&times;</button></td></tr>';
+        return '<tr><td class="num" data-label="Date">'+t.date+'</td><td data-label="Merchant"><span class="dot" style="background:'+dotColor+'; margin-right:8px;"></span>'+esc(t.merchant)+(t.auto?' <span class="pill pill-neutral" style="margin-left:4px;">auto</span>':'')+'</td>'+
+          '<td data-label="Category">'+categoryEmoji(t.category)+' '+esc(t.category)+'</td><td class="faint" data-label="Note">'+(t.note?esc(t.note):'')+'</td>'+
+          '<td class="amt" data-label="Amount" style="color:'+color+'; font-weight:700;">'+sign+' '+fmtTxAmount(t)+'</td>'+
+          '<td class="amt" data-label="Delete"><button class="btn btn-ghost btn-sm" data-tx-remove="'+t.id+'" title="Delete transaction" style="padding:2px 8px; font-size:15px; line-height:1;">&times;</button></td></tr>';
       }).join('') : '<tr><td colspan="6" class="empty">No transactions yet this month.</td></tr>') +
       '</tbody></table></div></div>'+
   '</div>';
@@ -2689,6 +2726,23 @@ function renderInstructionsTab(){
    the user confirm the mapping before anything is parsed into transactions.
    ============================================================ */
 var csvImportRows = [], csvImportHeaders = [], csvImportMap = {date:-1, merchant:-1, amount:-1};
+// Statements disagree on sign convention: most checking/debit-account exports show spending as NEGATIVE
+// numbers, but plenty of credit-card statements (and many PDFs) show every charge as a plain POSITIVE
+// number with no minus sign at all, using a separate column or just context to imply "this is a charge".
+// Guessing wrong here silently mislabels every expense as income (with a mislabeled category to match),
+// which is confusing and hard to notice — so this is auto-detected from the data, and the toggle in the
+// mapping UI lets the user correct it in one click if the guess is wrong for their particular statement.
+var csvAmountSignMode = 'negative-expense'; // 'negative-expense' | 'positive-expense'
+function parseAmountForSign(raw){ return parseFloat(String(raw||'').replace(/[$,]/g,'').trim()); }
+function isIncomeForAmount(amt){ return csvAmountSignMode==='positive-expense' ? amt<0 : amt>=0; }
+// If NONE of the parsed amounts in the current mapping are negative, the statement almost certainly
+// doesn't use a minus sign for spending at all (a very common shape for credit-card exports and PDFs) —
+// so default the toggle to "positive = expense" automatically instead of making every row look like income.
+function autoDetectAmountSignMode(){
+  if (csvImportMap.amount<0 || !csvImportRows.length) return;
+  var sawNegative = csvImportRows.some(function(r){ var a = parseAmountForSign(r[csvImportMap.amount]); return !isNaN(a) && a<0; });
+  csvAmountSignMode = sawNegative ? 'negative-expense' : 'positive-expense';
+}
 function parseCSV(text){
   // minimal RFC4180-ish parser: handles quoted fields, escaped quotes, and commas/newlines inside quotes
   var rows = [], row = [], field = '', inQuotes = false;
@@ -2739,7 +2793,7 @@ function significantMerchantWord(key){
 // normalized merchant key, so they're already lowercase with punctuation collapsed to spaces.
 var COMMON_MERCHANT_CATEGORIES = [
   {category:'Groceries', keywords:['trader joe','whole foods','safeway','kroger','albertsons','publix','aldi','costco','sams club','walmart','target','grocery','grocer','food lion','wegmans','stop shop','harris teeter','h e b','vons','ralphs','instacart']},
-  {category:'Dining Out', keywords:['starbucks','mcdonald','chipotle','subway','chick fil a','wendys','taco bell','burger king','dominos','pizza hut','panera','dunkin','doordash','uber eats','grubhub','postmates','restaurant','cafe','coffee','diner','bistro','bakery']},
+  {category:'Dining Out', keywords:['starbucks','mcdonald','chipotle','subway','chick fil a','wendys','taco bell','burger king','dominos','pizza hut','panera','dunkin','tim hortons','doordash','uber eats','grubhub','postmates','restaurant','cafe','coffee','diner','bistro','bakery']},
   {category:'Transportation', keywords:['uber','lyft','shell','chevron','exxon','mobil','conoco','arco','texaco','gas station','fuel','parking','transit','metro','mta','amtrak','car wash','auto repair','jiffy lube']},
   {category:'Entertainment', keywords:['netflix','spotify','hulu','disney','hbo','youtube premium','apple music','apple tv','peloton','playstation','xbox','steam','cinema','theater','theatre','amc','regal']},
   {category:'Utilities', keywords:['electric','power company','pg e','con edison','coned','duke energy','water utility','sewer','gas company','internet','comcast','xfinity','spectrum','fios','cox communications']},
@@ -2789,6 +2843,94 @@ function guessCategoryForMerchant(merchantRaw, isIncome){
   if (commonGuess) return { category: commonGuess, estimated:true };
   return { category: fallback, estimated:false };
 }
+
+/* ================= CATEGORY PICKER (emoji + real <select>, used anywhere a category is chosen) ================= */
+var CATEGORY_EMOJI = {
+  'groceries':'🛒', 'dining out':'🍽️', 'restaurants':'🍽️', 'transportation':'🚗', 'gas':'⛽', 'fuel':'⛽',
+  'entertainment':'🎬', 'streaming bundle':'📺', 'streaming':'📺', 'utilities':'💡', 'electric':'💡',
+  'internet':'📶', 'phone':'📱', 'water':'🚿', 'shopping':'🛍️', 'personal care':'🧴', 'insurance':'🛡️',
+  'rent':'🏠', 'mortgage':'🏠', 'housing':'🏠', 'household':'🧹', 'car payment':'🚗', 'car':'🚗',
+  'salary':'💼', 'freelance income':'💻', 'other income':'➕', 'debt payment':'💳', 'savings transfer':'💰',
+  'vacation':'✈️', 'travel':'✈️', 'education':'🎓', 'gifts':'🎁', 'health':'🩺', 'fitness':'🏋️',
+  'pets':'🐾', 'kids':'🧒', 'subscriptions':'🔁', 'other':'🏷️'
+};
+function categoryEmoji(name){
+  var key = String(name||'').toLowerCase().trim();
+  if (!key) return '🏷️';
+  if (CATEGORY_EMOJI[key]) return CATEGORY_EMOJI[key];
+  var found = Object.keys(CATEGORY_EMOJI).find(function(k){ return key.indexOf(k)>=0 || k.indexOf(key)>=0; });
+  return found ? CATEGORY_EMOJI[found] : '🏷️';
+}
+// One combined category list for any category-picker dropdown — your own bill/variable/income names first
+// (since those are the categories that actually mean something in YOUR budget), then the common defaults,
+// so the list is useful even before you've customized anything.
+function allCategoryNames(){
+  var list = [], seen = {};
+  function add(c){ c = String(c||'').trim(); if (c && !seen[c]){ seen[c] = 1; list.push(c); } }
+  state.bills.forEach(function(b){ add(b.name); });
+  state.variable.forEach(function(v){ add(v.name); });
+  ['Groceries','Dining Out','Transportation','Entertainment','Utilities','Phone','Shopping','Personal Care','Insurance','Household'].forEach(add);
+  add('Debt Payment'); add('Savings Transfer');
+  state.income.forEach(function(i){ add(i.name); });
+  add('Salary'); add('Freelance Income'); add('Other income');
+  add('Other');
+  return list;
+}
+// Renders a real <select> (with an emoji per option, so the dropdown arrow always works — no more
+// fiddly native datalist arrow) plus a hidden free-text fallback for anything not in the list yet.
+// attrName/attrValue become the data attribute pair used to find/wire this control later, e.g.
+// categoryPickerHtml('data-tx-cat', '1', 'Groceries') -> elements carrying data-tx-cat="1".
+function categoryPickerHtml(attrName, attrValue, currentValue){
+  var cats = allCategoryNames();
+  var current = String(currentValue||'').trim();
+  var isCustom = !!current && cats.indexOf(current) < 0;
+  var options = cats.map(function(c){ return '<option value="'+esc(c)+'"'+(!isCustom && c===current?' selected':'')+'>'+categoryEmoji(c)+' '+esc(c)+'</option>'; }).join('');
+  return '<select '+attrName+'-select="'+attrValue+'">'+options+'<option value="__custom__"'+(isCustom?' selected':'')+'>✏️ Custom category…</option></select>'+
+    '<input type="text" '+attrName+'-custom="'+attrValue+'" placeholder="Type a category" value="'+(isCustom?esc(current):'')+'" '+(isCustom?'':'hidden')+' style="margin-top:6px;">';
+}
+// Wires up ALL category pickers on the page at once (both the manual Add Transaction form and any CSV/PDF
+// review rows share this): toggling to "Custom category…" reveals the text field; onChange fires with the
+// resolved category string either way, so callers don't need to know which mode is active.
+function wireCategoryPickers(root, onChange){
+  Array.prototype.forEach.call(root.querySelectorAll('[data-tx-cat-select], [data-csv-cat-select]'), function(sel){
+    var attr = sel.hasAttribute('data-tx-cat-select') ? 'data-tx-cat' : 'data-csv-cat';
+    var id = sel.getAttribute(attr+'-select');
+    var customInput = root.querySelector('['+attr+'-custom="'+id+'"]');
+    sel.addEventListener('change', function(){
+      var isCustom = sel.value === '__custom__';
+      if (customInput){ customInput.hidden = !isCustom; if (isCustom) customInput.focus(); }
+      onChange(id, isCustom ? (customInput?customInput.value.trim():'') : sel.value);
+    });
+    if (customInput) customInput.addEventListener('input', function(){
+      if (sel.value === '__custom__') onChange(id, customInput.value.trim());
+    });
+  });
+}
+function resolvedCategoryValue(root, attr, id){
+  var sel = root.querySelector('['+attr+'-select="'+id+'"]');
+  if (!sel) return '';
+  if (sel.value === '__custom__'){
+    var customInput = root.querySelector('['+attr+'-custom="'+id+'"]');
+    return customInput ? customInput.value.trim() : '';
+  }
+  return sel.value;
+}
+// Programmatically points a category picker at `value` — selects it if it's one of the listed options,
+// otherwise falls into "Custom category…" mode with that text prefilled. Used when picking a bill/loan
+// to link a transaction to also suggests that bill/loan's own name as the category.
+function setCategoryPickerValue(root, attr, id, value){
+  var sel = root.querySelector('['+attr+'-select="'+id+'"]');
+  if (!sel) return;
+  var customInput = root.querySelector('['+attr+'-custom="'+id+'"]');
+  var hasOption = Array.prototype.some.call(sel.options, function(o){ return o.value===value; });
+  if (hasOption){
+    sel.value = value;
+    if (customInput) customInput.hidden = true;
+  } else {
+    sel.value = '__custom__';
+    if (customInput){ customInput.hidden = false; customInput.value = value; }
+  }
+}
 function guessColumn(headers, candidates){
   var lower = headers.map(function(h){ return h.trim().toLowerCase(); });
   for (var i=0;i<candidates.length;i++){
@@ -2815,6 +2957,7 @@ function handleCSVFile(){
       merchant: guessColumn(csvImportHeaders, ['merchant','description','payee','name']),
       amount: guessColumn(csvImportHeaders, ['amount','amount debit','debit','value'])
     };
+    autoDetectAmountSignMode();
     if (statusEl) statusEl.textContent = 'Found '+csvImportRows.length+' row'+(csvImportRows.length===1?'':'s')+' — confirm which column is which:';
     renderCSVMapping();
   };
@@ -2833,10 +2976,30 @@ function renderCSVMapping(){
   mapEl.innerHTML = '<div class="hstack" style="gap:10px; flex-wrap:wrap; margin-top:10px;">'+
       colSelect('date','Date')+ colSelect('merchant','Merchant / description')+ colSelect('amount','Amount')+
     '</div>'+
+    '<div class="field" style="margin-top:10px; max-width:420px;">'+
+      '<label>How does this statement show charges?</label>'+
+      '<select id="csv-sign-mode">'+
+        '<option value="negative-expense"'+(csvAmountSignMode==='negative-expense'?' selected':'')+'>Negative numbers = money out (most checking/debit accounts)</option>'+
+        '<option value="positive-expense"'+(csvAmountSignMode==='positive-expense'?' selected':'')+'>Positive numbers = money out (most credit cards)</option>'+
+      '</select>'+
+      '<div class="faint" style="margin-top:4px; font-size:11.5px;">We guessed based on the numbers in this file — flip it if your categories below look backwards (e.g. everyday purchases showing up as income).</div>'+
+    '</div>'+
     '<div style="margin-top:10px;"><button class="btn btn-primary" id="csv-preview-btn">Preview rows</button></div>'+
     '<div id="csv-review"></div>';
   Array.prototype.forEach.call(mapEl.querySelectorAll('[data-csv-map]'), function(sel){
-    sel.addEventListener('change', function(){ csvImportMap[sel.getAttribute('data-csv-map')] = parseInt(sel.value); });
+    sel.addEventListener('change', function(){
+      csvImportMap[sel.getAttribute('data-csv-map')] = parseInt(sel.value);
+      if (sel.getAttribute('data-csv-map')==='amount'){
+        autoDetectAmountSignMode();
+        var signSel = document.getElementById('csv-sign-mode');
+        if (signSel) signSel.value = csvAmountSignMode;
+      }
+    });
+  });
+  var signModeSel = document.getElementById('csv-sign-mode');
+  if (signModeSel) signModeSel.addEventListener('change', function(){
+    csvAmountSignMode = signModeSel.value;
+    if (csvReviewRows.length) renderCSVReview(); // re-guess categories too — they depend on income/expense
   });
   var btn = document.getElementById('csv-preview-btn');
   if (btn) btn.addEventListener('click', renderCSVReview);
@@ -2858,12 +3021,11 @@ function renderCSVReview(){
     if (statusEl) statusEl.textContent = 'Pick a column for date, merchant, and amount before previewing.';
     return;
   }
-  var allCats = state.bills.map(function(b){return b.name;}).concat(state.variable.map(function(v){return v.name;}));
   csvReviewRows = csvImportRows.slice(0,200).map(function(r,i){
     var rawAmt = String(r[csvImportMap.amount]||'').replace(/[$,]/g,'').trim();
     var amt = parseFloat(rawAmt);
     var merchant = String(r[csvImportMap.merchant]||'Unknown').trim() || 'Unknown';
-    var isIncome = amt>=0;
+    var isIncome = isIncomeForAmount(amt);
     var guess = guessCategoryForMerchant(merchant, isIncome);
     return {
       id:'c'+i, date: normalizeCSVDate(r[csvImportMap.date]), merchant: merchant,
@@ -2876,29 +3038,27 @@ function renderCSVReview(){
   reviewEl.innerHTML = '<div class="faint" style="margin:10px 0 4px;">'+csvReviewRows.length+' transaction'+(csvReviewRows.length===1?'':'s')+' ready — uncheck any you don’t want, fix a category, then import.'+
       (estimatedCount ? ' Categories marked <strong style="color:var(--ink);">Estimated</strong> are a best guess from your past transactions — check them and adjust if wrong.' : '')+
     '</div>'+
-    '<div class="stack" style="gap:0; max-height:360px; overflow-y:auto;">' + csvReviewRows.map(function(t){
+    '<div class="stack" style="gap:0; max-height:420px; overflow-y:auto;">' + csvReviewRows.map(function(t){
       return '<div class="hstack" style="justify-content:space-between; align-items:flex-start; gap:10px; padding:8px 0; border-bottom:1px solid var(--line);">'+
         '<input type="checkbox" data-csv-check="'+t.id+'" '+(t.checked?'checked':'')+' style="margin-top:3px; flex:none; width:16px; height:16px;">'+
-        '<span style="flex:1; min-width:0;"><span style="font-weight:600;">'+esc(t.merchant)+'</span> <span class="faint">'+t.date+'</span><br>'+
-          '<input type="text" list="cat-list-csv" data-csv-cat="'+t.id+'" value="'+esc(t.category)+'" style="width:160px; padding:3px 6px; font-size:12px; margin-top:2px;">'+
-          '<span data-csv-est-note="'+t.id+'" class="faint" style="display:'+(t.estimated?'inline':'none')+'; font-size:10.5px; color:var(--accent-strong); margin-left:6px;">Estimated — adjust if wrong</span></span>'+
+        '<span style="flex:1; min-width:0;"><span style="font-weight:600;">'+esc(t.merchant)+'</span> <span class="faint">'+t.date+'</span>'+
+          '<span data-csv-est-note="'+t.id+'" class="faint" style="display:'+(t.estimated?'inline':'none')+'; font-size:10.5px; color:var(--accent-strong); margin-left:6px;">Estimated — adjust if wrong</span>'+
+          '<div style="max-width:220px; margin-top:4px;">'+categoryPickerHtml('data-csv-cat', t.id, t.category)+'</div></span>'+
         '<span class="num" style="flex:none; padding-top:3px; color:'+(t.type==='income'?'var(--positive)':'var(--ink)')+';">'+(t.type==='income'?'+ ':'– ')+usd2(t.amount)+'</span>'+
       '</div>';
-    }).join('') + '<datalist id="cat-list-csv">'+allCats.map(function(c){ return '<option value="'+esc(c)+'">'; }).join('')+'</datalist>' +
+    }).join('') +
     '</div>'+
     '<div style="margin-top:10px;"><button class="btn btn-primary" id="csv-import-btn">Import selected transactions</button></div>';
   Array.prototype.forEach.call(reviewEl.querySelectorAll('[data-csv-check]'), function(cb){
     cb.addEventListener('change', function(){ var r = csvReviewRows.find(function(x){ return x.id===cb.getAttribute('data-csv-check'); }); if (r) r.checked = cb.checked; });
   });
-  Array.prototype.forEach.call(reviewEl.querySelectorAll('[data-csv-cat]'), function(inp){
-    inp.addEventListener('change', function(){
-      var r = csvReviewRows.find(function(x){ return x.id===inp.getAttribute('data-csv-cat'); });
-      if (!r) return;
-      r.category = inp.value.trim() || 'Other';
-      r.estimated = false; // once the user has touched it, it's confirmed, not a guess anymore
-      var note = reviewEl.querySelector('[data-csv-est-note="'+r.id+'"]');
-      if (note) note.style.display = 'none';
-    });
+  wireCategoryPickers(reviewEl, function(id, category){
+    var r = csvReviewRows.find(function(x){ return x.id===id; });
+    if (!r) return;
+    r.category = category || 'Other';
+    r.estimated = false; // once the user has touched it, it's confirmed, not a guess anymore
+    var note = reviewEl.querySelector('[data-csv-est-note="'+r.id+'"]');
+    if (note) note.style.display = 'none';
   });
   var importBtn = document.getElementById('csv-import-btn');
   if (importBtn) importBtn.addEventListener('click', function(){
@@ -2996,6 +3156,7 @@ function handlePDFFile(){
         csvImportHeaders = ['Date','Description','Amount'];
         csvImportRows = rows;
         csvImportMap = { date:0, merchant:1, amount:2 };
+        autoDetectAmountSignMode();
         if (statusEl) statusEl.textContent = 'Found '+rows.length+' possible transaction'+(rows.length===1?'':'s')+' in the PDF — statement text can be messy, so double-check these carefully, then confirm the columns below:';
         renderCSVMapping();
       }).catch(function(){
@@ -3459,6 +3620,7 @@ function wireView(view){
     var fxRow = document.getElementById('tx-fx-row');
     var fxNote = document.getElementById('tx-fx-note');
     var fxRateInput = document.getElementById('tx-fxrate');
+    var amountMoneyWrap = document.getElementById('tx-amount-money');
     var fxLookupSeq = 0; // guards a slow/late response from overwriting a newer lookup's result
     function setFxNote(text){ if (fxNote){ fxNote.textContent = text; fxNote.hidden = false; } }
     function tryAutoFetchRate(){
@@ -3483,6 +3645,8 @@ function wireView(view){
     function syncFxVisibility(){
       var isForeign = ccySelect.value !== baseCcy();
       fxRow.hidden = !isForeign; fxNote.hidden = !isForeign;
+      // the Amount field's $ prefix always reflects whichever currency is actually selected, not just the household default
+      if (amountMoneyWrap) amountMoneyWrap.style.setProperty('--money-symbol', JSON.stringify(ccySymbol(ccySelect.value)));
       if (isForeign) tryAutoFetchRate();
     }
     if (ccySelect){
@@ -3491,11 +3655,55 @@ function wireView(view){
       var dateElForFx = document.getElementById('tx-date');
       if (dateElForFx) dateElForFx.addEventListener('change', function(){ if (ccySelect.value !== baseCcy()) tryAutoFetchRate(); });
     }
+
+    // Category picker — a real <select> (with emoji + a "Custom category…" fallback) instead of the old
+    // free-text-plus-datalist field, which some browsers made awkward to open via its little dropdown arrow.
+    wireCategoryPickers(document, function(){ /* value is read directly from the DOM at submit time */ });
+
+    // Linking to an actual bill/loan is what makes a manually-logged payment correctly show that bill as
+    // PAID everywhere (Calendar, Overview "Due this week", Main Budget) — a bare Type="Bill" transaction
+    // with no link has no way to be matched back to a specific bill, so it used to keep showing as due
+    // even after you'd logged the payment by hand.
+    var typeSelect = document.getElementById('tx-type');
+    var linkedRow = document.getElementById('tx-linked-row');
+    var linkedLabel = document.getElementById('tx-linked-label');
+    var linkedSelect = document.getElementById('tx-linked-select');
+    function refreshLinkedSelect(){
+      var type = typeSelect.value;
+      if (type==='bill'){
+        linkedRow.hidden = false;
+        linkedLabel.textContent = 'Which bill is this?';
+        linkedSelect.innerHTML = '<option value="">— not linked to a specific bill —</option>' +
+          state.bills.map(function(b){ return '<option value="'+b.id+'">'+esc(b.name)+' ('+usd0(b.budgeted)+')</option>'; }).join('');
+      } else if (type==='debt'){
+        linkedRow.hidden = false;
+        linkedLabel.textContent = 'Which loan is this?';
+        linkedSelect.innerHTML = '<option value="">— not linked to a specific loan —</option>' +
+          (state.debts||[]).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+' (min '+usd0(d.minPayment)+')</option>'; }).join('');
+      } else {
+        linkedRow.hidden = true;
+        linkedSelect.innerHTML = '';
+      }
+    }
+    refreshLinkedSelect();
+    typeSelect.addEventListener('change', refreshLinkedSelect);
+    linkedSelect.addEventListener('change', function(){
+      var merchantInput = document.getElementById('tx-merchant');
+      var amountInput = document.getElementById('tx-amount');
+      var match = typeSelect.value==='bill'
+        ? state.bills.find(function(b){ return b.id===linkedSelect.value; })
+        : (state.debts||[]).find(function(d){ return d.id===linkedSelect.value; });
+      if (!match) return;
+      if (merchantInput && !merchantInput.value.trim()) merchantInput.value = match.name;
+      if (amountInput && !amountInput.value) amountInput.value = typeSelect.value==='bill' ? match.budgeted : match.minPayment;
+      setCategoryPickerValue(document, 'data-tx-cat', '1', match.name);
+    });
+
     document.getElementById('tx-add-btn').addEventListener('click', function(){
       var date = document.getElementById('tx-date').value || state.today;
       var merchant = document.getElementById('tx-merchant').value.trim();
       var type = document.getElementById('tx-type').value;
-      var category = document.getElementById('tx-category').value.trim() || (type==='income'?'Income':'Uncategorized');
+      var category = resolvedCategoryValue(document, 'data-tx-cat', '1') || (type==='income'?'Other income':'Other');
       var amount = parseFloat(document.getElementById('tx-amount').value);
       var currency = ccySelect ? ccySelect.value : baseCcy();
       var note = (document.getElementById('tx-note').value || '').trim();
@@ -3509,6 +3717,8 @@ function wireView(view){
       var row = {id:'t'+Date.now(), date:date, merchant:merchant, category:category, amount:amount, type:type, account:'acc-checking', auto:false};
       if (note) row.note = note;
       if (currency !== baseCcy()){ row.currency = currency; row.fxRate = fxRate; row.baseAmount = baseAmount; }
+      if (type==='bill' && linkedSelect.value) row.billId = linkedSelect.value;
+      if (type==='debt' && linkedSelect.value) row.debtId = linkedSelect.value;
       state.transactions.push(row);
       persist(); toast('Transaction added'); route();
     });
