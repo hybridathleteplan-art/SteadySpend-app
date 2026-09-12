@@ -331,9 +331,11 @@ label{font-size:12px; font-weight:600; color:var(--ink-soft); display:block; mar
 
 /* ============ TABLE ============ */
 .table-wrap{overflow-x:auto;}
-table{width:100%; border-collapse:collapse; font-size:13.3px;}
-th{text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-faint); font-weight:600; padding:0 12px 12px; border-bottom:1px solid var(--line); white-space:nowrap;}
-td{padding:14px 12px; border-bottom:1px solid var(--line); vertical-align:middle;}
+table{width:100%; border-collapse:collapse; font-size:12.8px;}
+th{text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-faint); font-weight:600; padding:0 12px 8px; border-bottom:1px solid var(--line); white-space:nowrap;}
+/* Rows were 14px top+bottom (~46px tall) — a long transaction list scrolled forever with a lot of dead
+   space per row, so this trims it to a noticeably more compact, denser row height. */
+td{padding:8px 12px; border-bottom:1px solid var(--line); vertical-align:middle;}
 /* Below ~640px, a wide multi-column table is what forces the annoying side-to-side scroll to see the
    amount/delete columns — so on narrow screens the Transactions table stops being a table at all and
    becomes a stack of label/value rows per transaction instead (a well-known responsive-table pattern),
@@ -342,11 +344,14 @@ td{padding:14px 12px; border-bottom:1px solid var(--line); vertical-align:middle
   .table-wrap{ overflow-x:visible; }
   .table-wrap table, .table-wrap tbody, .table-wrap tr, .table-wrap td{ display:block; width:100%; }
   .table-wrap thead{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
-  .table-wrap tr{ border:1px solid var(--line); border-radius:var(--radius-m); margin-bottom:10px; padding:4px 12px; }
+  .table-wrap tr{ border:1px solid var(--line); border-radius:var(--radius-m); margin-bottom:7px; padding:3px 12px; }
   .table-wrap tr:last-child{ margin-bottom:0; }
-  .table-wrap td{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid var(--line); text-align:right; }
+  .table-wrap td{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); text-align:right; }
   .table-wrap td:last-child{ border-bottom:none; }
   .table-wrap td:before{ content:attr(data-label); font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); font-weight:600; text-align:left; flex:none; }
+  /* A cell with genuinely no content (e.g. a blank Note) used to still take up a full label+border row —
+     dropping it outright is most of the height savings on a long list, since most transactions have no note. */
+  .table-wrap td:empty{ display:none; }
 }
 tr:last-child td{border-bottom:none;}
 td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums;}
@@ -419,6 +424,11 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 .seg{display:flex; border-radius:999px; overflow:hidden; border:1px solid var(--line); width:fit-content;}
 .seg button{border:none; background:var(--surface); color:var(--ink-soft); padding:7px 14px; font-size:12.5px; font-weight:600; cursor:pointer;}
 .seg button.active{background:var(--accent); color:var(--on-accent);}
+.seg-sm button{padding:4px 10px; font-size:11px;}
+/* The new "wow" chart cards (waterfall, budget-vs-actual) get a touch more breathing room than a plain
+   card-pad, since they're meant to read as the visual centerpiece of the Overview page, not just another list. */
+.chart-hero{padding-bottom:20px;}
+.chart-hero .card-title{font-size:15px; margin-bottom:12px;}
 
 /* ============ ACCOUNTS ============ */
 .acct-card{padding:18px 20px; display:flex; flex-direction:column; gap:12px;}
@@ -564,10 +574,16 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 .chart-legend-item .lg-right{display:flex; align-items:baseline; gap:7px; flex:none; white-space:nowrap;}
 .chart-legend-item .lg-pct{font-family:var(--font-mono); font-size:11px; font-weight:600; color:var(--ink-faint); min-width:26px; text-align:right;}
 .chart-donut-row{display:flex; gap:18px; align-items:center;}
-.chart-donut-wrap{position:relative; flex:0 0 auto; width:150px; height:150px!important;}
+/* Bumped up from a 150px donut — it's meant to be the visual centerpiece of its card, not a small icon
+   next to the legend, so it gets real presence on the page. */
+.chart-donut-wrap{position:relative; flex:0 0 auto; width:200px; height:200px!important;}
+@media (max-width:480px){
+  .chart-donut-row{flex-direction:column; align-items:center;}
+  .chart-legend-list{width:100%;}
+}
 .chart-donut-center{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none; text-align:center;}
-.chart-donut-center .dc-value{font-family:var(--font-mono); font-weight:700; font-size:16px; color:var(--ink); line-height:1.15;}
-.chart-donut-center .dc-label{font-size:10px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.04em; margin-top:1px;}
+.chart-donut-center .dc-value{font-family:var(--font-mono); font-weight:700; font-size:22px; color:var(--ink); line-height:1.15;}
+.chart-donut-center .dc-label{font-size:11px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.04em; margin-top:2px;}
 .chart-legend-list{flex:1; min-width:0; display:flex; flex-direction:column; gap:7px; margin-top:0; padding-top:0; border-top:none; justify-content:center;}
 .chart-legend-list .chart-legend-item{justify-content:space-between; font-size:12.5px; min-width:0;}
 .chart-legend-list .chart-legend-item .lg-name{display:flex; align-items:center; gap:7px; font-weight:500; color:var(--ink); min-width:0; flex:1 1 auto;}
@@ -1260,6 +1276,44 @@ function metrics(ym){
   return { income:income, expenses:expenses, savingsMoved:savingsMoved, netCashFlow: income-expenses,
            assetsTotal:assetsTotal, liabilitiesTotal:liabilitiesTotal, netWorth: assetsTotal-liabilitiesTotal };
 }
+// Per-type actual spend for one month — the three pieces "expenses" above lumps together, needed
+// separately for the waterfall and budget-vs-actual charts.
+function typeSpentForMonth(ym, type){ return sumBy(txForMonth(ym), function(t){ return t.type===type; }); }
+
+// ---- Real, computed monthly history (replaces a fixed demo-data array) ----
+// The trend chart used to read from a hardcoded 6-month array that was seeded once and never touched
+// again — it would still show the exact same "Apr–Sep" demo numbers a year from now, no matter how much
+// real data the household had actually entered. This computes every point from metrics(ym) against the
+// household's real transactions instead, so the chart is honest and grows automatically with real usage.
+var trendRangeKey = '6'; // '3' | '6' | '12' | 'all' — which of CHART_RANGE_OPTIONS is currently selected
+var CHART_RANGE_OPTIONS = [{key:'3', label:'3M'}, {key:'6', label:'6M'}, {key:'12', label:'12M'}, {key:'all', label:'All'}];
+function earliestTxMonth(){
+  var min = null;
+  state.transactions.forEach(function(t){ var ym = t.date.slice(0,7); if (!min || ym<min) min = ym; });
+  return min || state.month;
+}
+function computeMonthlyHistory(rangeKey){
+  var months;
+  if (rangeKey==='all'){
+    months = [];
+    var ym = earliestTxMonth();
+    while (ym <= state.month){ months.push(ym); ym = shiftYm(ym,1); if (months.length>36) break; } // sane cap on a very old dataset
+  } else {
+    var n = parseInt(rangeKey,10) || 6;
+    months = [];
+    for (var i=n-1;i>=0;i--) months.push(shiftYm(state.month, -i));
+  }
+  var labels = months.map(function(m){
+    var p = parseYM(m), d = new Date(p.y, p.m, 1);
+    var short = d.toLocaleDateString('en-US',{month:'short'});
+    return m===state.month ? short+' (MTD)' : short;
+  });
+  return {
+    months: months, labels: labels,
+    income: months.map(function(m){ return metrics(m).income; }),
+    expenses: months.map(function(m){ return metrics(m).expenses; })
+  };
+}
 
 // "Month-end wrap-up": once a calendar month is fully behind you, its actual income vs. actual spending
 // is a settled fact — not a plan — so it's worth surfacing once, prompting either "allocate the surplus"
@@ -1817,7 +1871,9 @@ function renderOverview(){
   var ym = state.month, m = metrics(ym);
   var range = resolveRange();
   var rm = metricsForRange(range.start, range.end);
-  var incomeHist = state.monthlyHistory.income, expHist = state.monthlyHistory.expenses;
+  var sparkHist = computeMonthlyHistory('6'); // KPI sparklines always show a fixed recent window, independent of the trend chart's own range toggle
+  var incomeHist = sparkHist.income, expHist = sparkHist.expenses;
+  var budgetActualRowCount = state.variable.length + 1 + (state.debts.length ? 1 : 0); // Bills + every variable category + Debt Payments (if any debts exist)
   var cashHist = incomeHist.map(function(v,i){ return v-expHist[i]; });
   var nwSeries = state.netWorth.history.map(function(h){ return h.value; });
   nwSeries[nwSeries.length-1] = m.netWorth;
@@ -1950,10 +2006,19 @@ function renderOverview(){
       '</div>'+
     '</div>'+
 
+    '<div class="card card-pad chart-hero" style="margin-bottom:16px;">'+
+      '<div class="card-title">Where your money went — '+esc(monthLabel(ym))+'</div>'+
+      '<div class="chart-wrap" style="height:280px;"><canvas id="chart-waterfall"></canvas></div>'+
+      '<div class="chart-legend" id="legend-waterfall"></div>'+
+    '</div>'+
+
     '<div class="grid grid-2" style="margin-bottom:16px;">'+
       '<div class="card card-pad">'+
-        '<div class="card-title">Income vs. expenses</div>'+
-        '<div class="chart-wrap" style="height:210px;"><canvas id="chart-incomeexp"></canvas></div>'+
+        '<div class="hstack" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">'+
+          '<div class="card-title" style="margin-bottom:0;">Income vs. expenses</div>'+
+          '<div class="seg seg-sm" id="trend-range-seg">'+ CHART_RANGE_OPTIONS.map(function(o){ return '<button data-trend-range="'+o.key+'" class="'+(trendRangeKey===o.key?'active':'')+'">'+o.label+'</button>'; }).join('') +'</div>'+
+        '</div>'+
+        '<div class="chart-wrap" style="height:240px; margin-top:10px;"><canvas id="chart-incomeexp"></canvas></div>'+
         '<div class="chart-legend" id="legend-incomeexp"></div>'+
       '</div>'+
       '<div class="card card-pad">'+
@@ -1963,6 +2028,12 @@ function renderOverview(){
           '<div class="chart-legend chart-legend-list" id="legend-breakdown"></div>'+
         '</div>'+
       '</div>'+
+    '</div>'+
+
+    '<div class="card card-pad" style="margin-bottom:16px;">'+
+      '<div class="card-title">Budget vs. actual — '+esc(monthLabel(ym))+'</div>'+
+      '<div class="chart-wrap" id="budgetactual-wrap" style="height:'+Math.max(160, budgetActualRowCount*36)+'px;"><canvas id="chart-budgetactual"></canvas></div>'+
+      '<div class="chart-legend" id="legend-budgetactual"></div>'+
     '</div>'+
 
     '<div class="grid grid-2">'+
@@ -2250,7 +2321,7 @@ function renderTransactions(){
           '<option value="savings">Savings transfer</option><option value="income">Income</option></select></div>'+
       '</div>'+
       '<div class="form-row" style="margin-top:12px;">'+
-        '<div class="field"><label>Merchant</label><input type="text" id="tx-merchant" placeholder="e.g. Trader Joe’s"></div>'+
+        '<div class="field"><label>Merchant <span class="faint" style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label><input type="text" id="tx-merchant" placeholder="e.g. Trader Joe’s — leave blank to just use the category"></div>'+
         '<div class="field"><label>Amount</label><div class="fx-row"><select id="tx-currency">'+ Object.keys(CURRENCIES).map(function(c){ return '<option value="'+c+'" '+(c===baseCcy()?'selected':'')+'>'+c+'</option>'; }).join('') +'</select><span class="money-field" id="tx-amount-money" style="display:flex; flex:1;"><input type="number" min="0" step="0.01" id="tx-amount" placeholder="0.00"></span></div></div>'+
       '</div>'+
       '<div class="form-row" id="tx-linked-row" style="margin-top:12px;" hidden>'+
@@ -2473,6 +2544,11 @@ function renderSavings(){
     '</div>';
   }).join('');
   return '<div class="view">'+
+    (state.savings.length>=2 ? '<div class="card card-pad" style="margin-bottom:16px;">'+
+      '<div class="card-title">All goals at a glance</div>'+
+      '<div class="chart-wrap" style="height:'+Math.max(120, state.savings.length*42)+'px;"><canvas id="chart-goals-combined"></canvas></div>'+
+      '<div class="chart-legend" id="legend-goals-combined"></div>'+
+    '</div>' : '')+
     '<div class="grid grid-3" style="margin-bottom:16px;">'+ (goalCards || '<div class="card card-pad empty" style="grid-column:1/-1;">No savings goals yet — add one below.</div>') +'</div>'+
     '<div class="card card-pad">'+
       addForm('add-goal', 'Add a savings goal', [
@@ -2542,7 +2618,10 @@ function renderNetWorth(){
       '</div>'+
       '<div class="card card-pad">'+
         '<div class="card-title">Net worth trend</div>'+
-        '<div class="chart-wrap" style="height:220px;"><canvas id="chart-networth"></canvas></div>'+
+        '<div class="chart-wrap" style="height:190px;"><canvas id="chart-networth"></canvas></div>'+
+        '<div class="hstack" style="justify-content:space-between; margin:16px 0 2px;"><span class="faint" style="font-weight:700; text-transform:uppercase; font-size:10.5px; letter-spacing:.05em;">Today’s composition</span></div>'+
+        '<div class="chart-wrap" style="height:64px;"><canvas id="chart-networth-composition"></canvas></div>'+
+        '<div class="chart-legend" id="legend-networth-composition" style="margin-top:6px; padding-top:6px;"></div>'+
       '</div>'+
     '</div>'+
     '<div class="grid grid-2" style="margin-top:16px;">'+
@@ -3409,12 +3488,13 @@ function paintCharts(view){
     var el = document.getElementById('chart-incomeexp');
     if (el){
       killChart('incomeexp');
-      var savedSeries = state.monthlyHistory.income.map(function(v,i){ return v - state.monthlyHistory.expenses[i]; });
+      var trendHist = computeMonthlyHistory(trendRangeKey);
+      var savedSeries = trendHist.income.map(function(v,i){ return v - trendHist.expenses[i]; });
       chartInstances.incomeexp = new Chart(el, { data:{
-        labels: state.monthlyHistory.labels,
+        labels: trendHist.labels,
         datasets:[
-          {type:'bar', label:'Income', data: state.monthlyHistory.income, backgroundColor:positive, borderRadius:4, maxBarThickness:22, order:2},
-          {type:'bar', label:'Expenses', data: state.monthlyHistory.expenses, backgroundColor:navy, borderRadius:4, maxBarThickness:22, order:2},
+          {type:'bar', label:'Income', data: trendHist.income, backgroundColor:positive, borderRadius:4, maxBarThickness:22, order:2},
+          {type:'bar', label:'Expenses', data: trendHist.expenses, backgroundColor:navy, borderRadius:4, maxBarThickness:22, order:2},
           Object.assign({type:'line', label:'Saved', data: savedSeries, borderColor:accent, backgroundColor:hexToRgba(accent,0.12), fill:false, tension:0.3, borderWidth:2, order:1, yAxisID:'y'}, endpointStyle(savedSeries.length, accent, 3))
         ]},
         options:{ responsive:true, maintainAspectRatio:false,
@@ -3445,6 +3525,90 @@ function paintCharts(view){
       if (centerEl) centerEl.innerHTML = '<div class="dc-value">'+usd0(total)+'</div><div class="dc-label">planned / mo</div>';
       var legendEl2 = document.getElementById('legend-breakdown');
       if (legendEl2) legendEl2.innerHTML = chartLegendHtml(labels.map(function(l,i){ return {label:l, color:colors[i], value:data[i], pct: total? (data[i]/total*100) : 0}; }));
+    }
+    var elWF = document.getElementById('chart-waterfall');
+    if (elWF){
+      killChart('waterfall');
+      var wfYm = state.month;
+      var wfIncome = typeSpentForMonth(wfYm,'income');
+      var wfRunning = wfIncome;
+      var wfSteps = [ {name:'Income', range:[0, wfIncome], amount:wfIncome, color:positive} ];
+      function wfDrop(name, amt, color){
+        var from = wfRunning - amt;
+        wfSteps.push({name:name, range:[from, wfRunning], amount:-amt, color:color});
+        wfRunning = from;
+      }
+      wfDrop('Bills', typeSpentForMonth(wfYm,'bill'), catChartColor('Bills'));
+      wfDrop('Variable', typeSpentForMonth(wfYm,'variable'), catChartColor('Other Variable'));
+      wfDrop('Debt', typeSpentForMonth(wfYm,'debt'), catChartColor('Debt Payments'));
+      wfDrop('Savings', typeSpentForMonth(wfYm,'savings'), catChartColor('Savings'));
+      var wfLeftoverColor = wfRunning>=0 ? accent : negative;
+      wfSteps.push({name:'Left over', range:[0, wfRunning], amount:wfRunning, color:wfLeftoverColor});
+      // Draws each step's signed $ amount just above its bar — a floating bar chart alone doesn't say
+      // "this step is -$X" without either this or a lot of extra hovering, and the whole point of a
+      // waterfall is reading the flow at a glance.
+      var waterfallLabelPlugin = {
+        id:'waterfallLabels',
+        afterDatasetsDraw: function(chart){
+          var ctx = chart.ctx, meta = chart.getDatasetMeta(0);
+          ctx.save();
+          ctx.font = "600 11px 'IBM Plex Mono', monospace";
+          ctx.fillStyle = ink;
+          ctx.textAlign = 'center';
+          meta.data.forEach(function(bar, i){
+            var s = wfSteps[i];
+            var text = (s.amount>=0?'+':'−')+usd0(Math.abs(s.amount));
+            var topY = Math.min(bar.y, bar.base) - 8;
+            ctx.fillText(text, bar.x, topY);
+          });
+          ctx.restore();
+        }
+      };
+      chartInstances.waterfall = new Chart(elWF, { type:'bar', data:{
+        labels: wfSteps.map(function(s){ return s.name; }),
+        datasets:[{ data: wfSteps.map(function(s){ return s.range; }), backgroundColor: wfSteps.map(function(s){ return s.color; }), borderRadius:4, maxBarThickness:64 }]
+      }, options:{ responsive:true, maintainAspectRatio:false,
+        layout:{ padding:{ top:22 } },
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{
+          title:function(items){ return wfSteps[items[0].dataIndex].name; },
+          label:function(ctx){ var s = wfSteps[ctx.dataIndex]; return ' '+(s.amount>=0?'+':'−')+usd0(Math.abs(s.amount)); }
+        } } },
+        scales:{ y:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, x:{ grid:{display:false}, border:{display:false} } } },
+      plugins:[waterfallLabelPlugin] });
+      var legendWF = document.getElementById('legend-waterfall');
+      if (legendWF) legendWF.innerHTML = chartLegendHtml([
+        {label:'Income', color:positive}, {label:'Bills', color:catChartColor('Bills')}, {label:'Variable expenses', color:catChartColor('Other Variable')},
+        {label:'Debt payments', color:catChartColor('Debt Payments')}, {label:'Savings', color:catChartColor('Savings')}, {label:'Left over', color:wfLeftoverColor}
+      ]);
+    }
+    var elBA = document.getElementById('chart-budgetactual');
+    if (elBA){
+      killChart('budgetactual');
+      var baYm = state.month;
+      var baRows = [ {name:'Bills', budgeted: billsBudgetTotal(), actual: typeSpentForMonth(baYm,'bill'), color: catChartColor('Bills')} ];
+      state.variable.forEach(function(v){
+        baRows.push({name:v.name, budgeted:v.budgeted, actual: categorySpent(v.name, baYm), color: catChartColor(v.name)});
+      });
+      if (state.debts && state.debts.length){
+        baRows.push({name:'Debt Payments', budgeted: debtMinTotal(), actual: typeSpentForMonth(baYm,'debt'), color: catChartColor('Debt Payments')});
+      }
+      // Most-over-budget first — that's the whole point of this chart, so the categories that need
+      // attention are the first thing you see, not buried at the bottom of an alphabetical-ish list.
+      baRows.sort(function(a,b){ return (b.actual-b.budgeted) - (a.actual-a.budgeted); });
+      var baActualColors = baRows.map(function(r){ return r.actual > r.budgeted ? negative : positive; });
+      chartInstances.budgetactual = new Chart(elBA, { type:'bar', data:{
+        labels: baRows.map(function(r){ return r.name; }),
+        datasets:[
+          {label:'Budgeted', data: baRows.map(function(r){ return r.budgeted; }), backgroundColor: hexToRgba(inkFaint,0.35), borderRadius:4, maxBarThickness:14},
+          {label:'Actual', data: baRows.map(function(r){ return r.actual; }), backgroundColor: baActualColors, borderRadius:4, maxBarThickness:14}
+        ]
+      }, options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:function(ctx){ return ' '+ctx.dataset.label+': '+usd0(ctx.parsed.x); } } } },
+        scales:{ x:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, y:{ grid:{display:false}, border:{display:false} } } } });
+      var legendBA = document.getElementById('legend-budgetactual');
+      if (legendBA) legendBA.innerHTML = chartLegendHtml([
+        {label:'Budgeted', color: hexToRgba(inkFaint,0.6)}, {label:'Actual — under/at budget', color:positive}, {label:'Actual — over budget', color:negative}
+      ]);
     }
     var elBI = document.getElementById('chart-bills-income');
     if (elBI){
@@ -3490,12 +3654,91 @@ function paintCharts(view){
       killChart('debt');
       var sim = simulateDebtPayoff(state.debts, state.debtMethod, state.debtExtra);
       var span = Math.min(sim.timeline.length, 60); // cap the label list on very long payoffs; the line itself still plots every month
+      var debtFreeLabel = 'Debt-free '+new Date(TODAY.getFullYear(), TODAY.getMonth()+sim.months, 1).toLocaleDateString('en-US',{month:'short',year:'numeric'});
+      // Labels the exact point the balance hits $0 right on the chart — the "Debt-free by" figure already
+      // sits in a stat tile above, but seeing it land on the curve itself is what makes the payoff feel real.
+      var debtMilestonePlugin = {
+        id:'debtMilestone',
+        afterDatasetsDraw: function(chart){
+          var meta = chart.getDatasetMeta(0);
+          var lastPoint = meta.data[meta.data.length-1];
+          if (!lastPoint || sim.months<=0) return;
+          var ctx = chart.ctx;
+          ctx.save();
+          ctx.font = "600 11px 'Public Sans', sans-serif";
+          ctx.fillStyle = negative;
+          ctx.textAlign = lastPoint.x > chart.chartArea.right-60 ? 'right' : 'center';
+          ctx.fillText(debtFreeLabel, lastPoint.x, lastPoint.y - 14);
+          ctx.restore();
+        }
+      };
       chartInstances.debt = new Chart(el3, { type:'line', data:{
         labels: futureMonthLabels(sim.timeline.length, state.month),
         datasets:[ Object.assign({ label:'Remaining balance', data: sim.timeline, borderColor:negative, backgroundColor:hexToRgba(negative,0.14), fill:true, tension:0.25, borderWidth:2 }, endpointStyle(sim.timeline.length, negative)) ]
       }, options:{ responsive:true, maintainAspectRatio:false,
+        layout:{ padding:{ top:22 } },
         plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:function(ctx){ return ' Balance: '+usd0(ctx.parsed.y); } } } },
-        scales:{ y:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, x:{ grid:{display:false}, border:{display:false}, ticks:{ maxTicksLimit:Math.min(span,8) } } } } });
+        scales:{ y:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, x:{ grid:{display:false}, border:{display:false}, ticks:{ maxTicksLimit:Math.min(span,8) } } } },
+      plugins:[debtMilestonePlugin] });
+    }
+  }
+  if (view==='savings'){
+    var el5 = document.getElementById('chart-goals-combined');
+    if (el5){
+      killChart('goalscombined');
+      var goalRows = state.savings.map(function(g){
+        var ratio = g.goal>0 ? clamp(g.saved/g.goal*100,0,100) : 0;
+        return { name:g.name, saved: Math.min(g.saved,g.goal), remaining: Math.max(0,g.goal-g.saved), ratio: ratio };
+      }).sort(function(a,b){ return b.ratio-a.ratio; });
+      // Draws each bar's % complete right at its end — the point of a combined view is comparing progress
+      // across goals at a glance, and a bare stacked-dollar bar makes that comparison harder, not easier.
+      var goalsLabelPlugin = {
+        id:'goalsCombinedLabels',
+        afterDatasetsDraw: function(chart){
+          var ctx = chart.ctx, meta = chart.getDatasetMeta(1);
+          ctx.save();
+          ctx.font = "600 11px 'IBM Plex Mono', monospace";
+          ctx.fillStyle = ink;
+          ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+          meta.data.forEach(function(bar, i){
+            var pos = bar.tooltipPosition ? bar.tooltipPosition() : {x:bar.x, y:bar.y};
+            ctx.fillText(Math.round(goalRows[i].ratio)+'%', pos.x + 6, pos.y);
+          });
+          ctx.restore();
+        }
+      };
+      chartInstances.goalscombined = new Chart(el5, { type:'bar', data:{
+        labels: goalRows.map(function(r){ return r.name; }),
+        datasets:[
+          {label:'Saved', data: goalRows.map(function(r){ return r.saved; }), backgroundColor: positive, borderRadius:4, maxBarThickness:20, stack:'s'},
+          {label:'Remaining', data: goalRows.map(function(r){ return r.remaining; }), backgroundColor: hexToRgba(inkFaint,0.25), borderRadius:4, maxBarThickness:20, stack:'s'}
+        ]
+      }, options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        layout:{ padding:{ right:40 } },
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:function(ctx){ return ' '+ctx.dataset.label+': '+usd0(ctx.parsed.x); } } } },
+        scales:{ x:{ stacked:true, grid:dashedGrid, ticks:moneyTick, border:{display:false} }, y:{ stacked:true, grid:{display:false}, border:{display:false} } } },
+      plugins:[goalsLabelPlugin] });
+      var legendGC = document.getElementById('legend-goals-combined');
+      if (legendGC) legendGC.innerHTML = chartLegendHtml([{label:'Saved', color:positive}, {label:'Remaining', color: hexToRgba(inkFaint,0.5)}]);
+    }
+  }
+  if (view==='networth'){
+    var el4b = document.getElementById('chart-networth-composition');
+    if (el4b){
+      killChart('networthcomp');
+      var assetsNow = state.netWorth.assets.reduce(function(s,a){ return s+a.value; },0);
+      var liabNow = state.debts.reduce(function(s,d){ return s+d.balance; },0) + (state.netWorth.liabilities||[]).reduce(function(s,l){ return s+l.value; },0);
+      chartInstances.networthcomp = new Chart(el4b, { type:'bar', data:{
+        labels:[''],
+        datasets:[
+          {label:'Assets', data:[assetsNow], backgroundColor:positive, borderRadius:4, maxBarThickness:20},
+          {label:'Liabilities', data:[-liabNow], backgroundColor:negative, borderRadius:4, maxBarThickness:20}
+        ]
+      }, options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:function(ctx){ return ' '+ctx.dataset.label+': '+usd0(Math.abs(ctx.parsed.x)); } } } },
+        scales:{ x:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, y:{ grid:{display:false}, border:{display:false}, ticks:{display:false} } } } });
+      var legendNWC = document.getElementById('legend-networth-composition');
+      if (legendNWC) legendNWC.innerHTML = chartLegendHtml([{label:'Assets', color:positive}, {label:'Liabilities', color:negative}]);
     }
   }
   if (view==='networth'){
@@ -3634,6 +3877,12 @@ function wireView(view){
         rangeState.mode = btn.getAttribute('data-range');
         if (rangeState.mode==='custom' && !rangeState.start){ rangeState.start = state.month+'-01'; rangeState.end = state.today; }
         saveRangeState(rangeState); route();
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#trend-range-seg button'), function(btn){
+      btn.addEventListener('click', function(){
+        trendRangeKey = btn.getAttribute('data-trend-range');
+        route();
       });
     });
     var rangeApply = document.getElementById('range-apply');
@@ -3863,7 +4112,8 @@ function wireView(view){
       var amount = parseFloat(document.getElementById('tx-amount').value);
       var currency = ccySelect ? ccySelect.value : baseCcy();
       var note = (document.getElementById('tx-note').value || '').trim();
-      if (!merchant || !amount || amount<=0){ toast('Add a merchant and amount'); return; }
+      if (!amount || amount<=0){ toast('Enter an amount'); return; }
+      if (!merchant) merchant = category; // merchant is optional — falls back to the category name so the row still reads sensibly in every list
       var baseAmount = amount, fxRate = 1;
       if (currency !== baseCcy()){
         fxRate = parseFloat(document.getElementById('tx-fxrate').value);
