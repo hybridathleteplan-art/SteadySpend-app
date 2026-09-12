@@ -336,22 +336,15 @@ th{text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.
 /* Rows were 14px top+bottom (~46px tall) — a long transaction list scrolled forever with a lot of dead
    space per row, so this trims it to a noticeably more compact, denser row height. */
 td{padding:8px 12px; border-bottom:1px solid var(--line); vertical-align:middle;}
-/* Below ~640px, a wide multi-column table is what forces the annoying side-to-side scroll to see the
-   amount/delete columns — so on narrow screens the Transactions table stops being a table at all and
-   becomes a stack of label/value rows per transaction instead (a well-known responsive-table pattern),
-   so every column is visible at once with no horizontal scrolling. */
+/* Below ~640px, this stays a real table (a stacked label/value "card" layout was tried before and
+   didn't land) — just a more compact one: smaller type/padding, and the Note column (not one of the
+   four columns that matter most on a phone) drops out entirely so Date/Merchant/Category/Amount/Delete
+   fit without fighting for space. .table-wrap's overflow-x:auto (set above, unconditionally) is the
+   fallback for a genuinely long Merchant name — the table scrolls inside its own box, never the page. */
 @media (max-width:640px){
-  .table-wrap{ overflow-x:visible; }
-  .table-wrap table, .table-wrap tbody, .table-wrap tr, .table-wrap td{ display:block; width:100%; }
-  .table-wrap thead{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
-  .table-wrap tr{ border:1px solid var(--line); border-radius:var(--radius-m); margin-bottom:7px; padding:3px 12px; }
-  .table-wrap tr:last-child{ margin-bottom:0; }
-  .table-wrap td{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); text-align:right; }
-  .table-wrap td:last-child{ border-bottom:none; }
-  .table-wrap td:before{ content:attr(data-label); font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); font-weight:600; text-align:left; flex:none; }
-  /* A cell with genuinely no content (e.g. a blank Note) used to still take up a full label+border row —
-     dropping it outright is most of the height savings on a long list, since most transactions have no note. */
-  .table-wrap td:empty{ display:none; }
+  .table-wrap table{ font-size:11.5px; }
+  .table-wrap th, .table-wrap td{ padding:6px 7px; }
+  .table-wrap th:nth-child(4), .table-wrap td[data-label="Note"]{ display:none; }
 }
 tr:last-child td{border-bottom:none;}
 td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums;}
@@ -1162,6 +1155,51 @@ function savingsById(id){ return state.savings.find(function(s){ return s.id===i
 function accountById(id){ return state.accounts.find(function(a){ return a.id===id; }); }
 function incomeById(id){ return state.income.find(function(i){ return i.id===id; }); }
 function debtPaidTx(debtId, ym){ return txForMonth(ym).find(function(t){ return t.type==='debt' && t.debtId===debtId; }); }
+// Tap-to-mark-paid for a bill/debt "paid" status pill — shared by every place that renders one (Calendar,
+// and now the Main Budget page's Bills/Debt payments rows too), so there's one toggle behavior instead of
+// each page reimplementing its own. The day a newly-paid transaction gets dated on is always this bill's/
+// debt's own resolved due day for the month (effDay) — identical to what Calendar's own grid cells use,
+// so it doesn't matter which page the click happened on.
+function toggleBillPaid(billId){
+  var ym = state.month;
+  var bill = state.bills.find(function(b){ return b.id===billId; });
+  if (!bill) return;
+  var existing = billPaidTx(billId, ym);
+  if (existing){
+    confirmDelete('Mark '+esc(bill.name)+' as unpaid again? This removes its paid transaction.', function(){
+      state.transactions = state.transactions.filter(function(x){ return x.id!==existing.id; });
+      persist(); toast(bill.name+' marked unpaid'); route();
+    });
+    return;
+  }
+  var day = effDay(bill.dueDay, ym);
+  state.transactions.push({id:'t'+Date.now(), date: ym+'-'+String(day).padStart(2,'0'), merchant:bill.name, category:bill.name, amount:bill.budgeted, type:'bill', billId:bill.id, account:'acc-checking', auto:false});
+  persist(); toast(bill.name+' marked paid'); route();
+}
+function toggleDebtPaid(debtId){
+  var ym = state.month;
+  var d = debtById(debtId);
+  if (!d) return;
+  var existing = debtPaidTx(debtId, ym);
+  if (existing){
+    confirmDelete('Mark '+esc(d.name)+'\'s payment as unpaid again? This removes its paid transaction.', function(){
+      state.transactions = state.transactions.filter(function(x){ return x.id!==existing.id; });
+      persist(); toast(d.name+' payment marked unpaid'); route();
+    });
+    return;
+  }
+  var day = effDay(d.dueDay||1, ym);
+  state.transactions.push({id:'t'+Date.now(), date: ym+'-'+String(day).padStart(2,'0'), merchant:d.name+' payment', category:d.name, amount:d.minPayment, type:'debt', debtId:d.id, account:'acc-checking', auto:false});
+  persist(); toast(d.name+' payment marked paid'); route();
+}
+function wireBillDebtToggles(){
+  Array.prototype.forEach.call(document.querySelectorAll('[data-bill-toggle]'), function(el){
+    el.addEventListener('click', function(){ toggleBillPaid(el.getAttribute('data-bill-toggle')); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-debt-toggle]'), function(el){
+    el.addEventListener('click', function(){ toggleDebtPaid(el.getAttribute('data-debt-toggle')); });
+  });
+}
 
 // income "cadence" used to be decorative free text with no effect on any number — this makes frequency real:
 // every income source is normalized to a monthly-equivalent amount, and (where a fixed day makes sense) to real calendar days.
@@ -1210,26 +1248,24 @@ function incomeConfirmDateFor(i, ym){
   return dateStr;
 }
 // Recurring income (anything except "Variable / irregular") that's been confirmed once keeps auto-confirming
-// itself every month after that — from the month it was first confirmed through the current month — so the
-// user presses "Confirm income" a single time instead of every month forever. Variable income is never
-// auto-generated here: by definition there's no fixed amount to assume, so it always needs a fresh confirm.
+// itself every month after that — but ONLY the currently-viewed month, and only from the month it was first
+// confirmed onward. Earlier versions of this bridged the whole gap between the confirm month and today in
+// one go, which meant browsing to a month you hadn't actually opened yet could still get an income
+// transaction backfilled into it — surprising, and not what "add it automatically" was supposed to mean.
+// Now it only ever creates one for state.month itself, each time you're actually viewing that month, and
+// never for a month before the one you confirmed in.
 function autoConfirmRecurringIncome(){
   var changed = false;
+  var ym = state.month;
   state.income.forEach(function(i){
     if (!i.autoConfirm || incomeFreq(i)==='variable') return;
-    var ym = i.autoConfirmSince || state.month;
-    var guard = 0;
-    while (ym <= state.month && guard < 240){
-      if (!incomeTxForMonth(i.id, ym)){
-        var amt = incomeMonthlyEquivalent(i, ym);
-        if (amt > 0){
-          state.transactions.push({id:'t'+Date.now()+Math.random().toString(36).slice(2,7), date: incomeConfirmDateFor(i, ym),
-            merchant:i.name, category:i.name, amount:amt, type:'income', incomeId:i.id, account:'acc-checking', auto:true});
-          changed = true;
-        }
-      }
-      ym = shiftYm(ym, 1);
-      guard++;
+    if (i.autoConfirmSince && ym < i.autoConfirmSince) return; // never backfill a month before the confirm point
+    if (incomeTxForMonth(i.id, ym)) return;
+    var amt = incomeMonthlyEquivalent(i, ym);
+    if (amt > 0){
+      state.transactions.push({id:'t'+Date.now()+Math.random().toString(36).slice(2,7), date: incomeConfirmDateFor(i, ym),
+        merchant:i.name, category:i.name, amount:amt, type:'income', incomeId:i.id, account:'acc-checking', auto:true});
+      changed = true;
     }
   });
   if (changed) persist();
@@ -1816,7 +1852,8 @@ function ic(name){
     spark: '<path d="M12 3l1.6 4.6L18 9l-4.4 1.4L12 15l-1.6-4.6L6 9l4.4-1.4L12 3z"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V20a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H4a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H10a1.7 1.7 0 0 0 1-1.6V4a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V10a1.7 1.7 0 0 0 1.6 1H20a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.6 1z"/>',
     apple: '<path d="M16.4 2.5c.1 1.1-.3 2.2-1 3-.7.8-1.9 1.5-3 1.4-.1-1.1.4-2.3 1.1-3 .7-.8 1.9-1.4 2.9-1.4z"/><path d="M20.5 17.2c-.5 1.2-.8 1.7-1.5 2.7-1 1.4-2.3 3.2-4 3.2-1.5 0-1.9-1-3.9-1s-2.5 1-4 1c-1.7 0-3-1.6-4-3-2.7-3.9-3-8.5-1.3-10.9 1.2-1.7 3.1-2.7 4.9-2.7 1.5 0 2.7 1 4 1 1.2 0 2.2-1 4-1 1.5 0 3.1.8 4.2 2.2-3.7 2-3.1 7.3 1.6 8.5z"/>',
-    trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>'
+    trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>'
   };
   return '<svg '+S+'>'+(map[name]||map.overview)+'</svg>';
 }
@@ -2076,7 +2113,7 @@ function renderOverview(){
 
     '<div class="card card-pad" style="margin-bottom:16px;">'+
       '<div class="card-title">Budget vs. actual — '+esc(monthLabel(ym))+'</div>'+
-      '<div class="faint" style="margin:-4px 0 10px;">Each row is one category. The pale bar is what you budgeted; the solid bar next to it is what you actually spent — green means you\'re within budget, red means you went over. The exact $ amounts are printed right on the chart.</div>'+
+      '<div class="faint" style="margin:-4px 0 10px;">Each row is one category. The pale bar is what you budgeted; the solid bar next to it is what you actually spent — green means you\'re within budget, red means you went over. The exact $ amounts, plus exactly how far over or under you are, are printed right on the chart.</div>'+
       '<div class="chart-wrap" id="budgetactual-wrap" style="height:'+Math.max(160, budgetActualRowCount*36)+'px;"><canvas id="chart-budgetactual"></canvas></div>'+
       '<div class="chart-legend" id="legend-budgetactual"></div>'+
     '</div>'+
@@ -2138,8 +2175,10 @@ function billRow(b){
   var monthlyEq = billMonthlyEquivalent(b);
   var activeThisMonth = billActiveInMonth(b, ym);
   var paid = activeThisMonth && !!billPaidTx(b.id, ym);
+  // Tappable right here (same paid/unpaid toggle Calendar already offers) — no need to go to Calendar
+  // just to mark this month's rent as paid.
   var statusPill = activeThisMonth
-    ? ('<span class="pill '+(paid?'pill-positive':'pill-neutral')+'">'+(paid?'Paid':'Due '+ordinal(effDay(b.dueDay, ym)))+'</span>')
+    ? ('<span class="pill '+(paid?'pill-positive':'pill-neutral')+'" data-bill-toggle="'+b.id+'" style="cursor:pointer;" title="'+(paid?'Paid — tap to mark unpaid again':'Tap to mark as paid')+'">'+(paid?'Paid':'Due '+ordinal(effDay(b.dueDay, ym)))+'</span>')
     : (isYearly ? ('<span class="pill pill-neutral">Next: '+MONTH_NAMES[(b.dueMonth||1)-1].slice(0,3)+' '+(b.dueDay||1)+'</span>') : '');
   return '<div class="bill-row">'+
     '<div class="hstack" style="justify-content:space-between; gap:8px;">'+
@@ -2197,11 +2236,15 @@ function renderBudget(){
   }).join('');
 
   var priorityId = debtPriorityOrder()[0] ? debtPriorityOrder()[0].id : null;
+  // Tappable paid/due status here too (same toggle Calendar offers) — no need to leave the Budget page
+  // just to mark this month's loan payment as made.
   var debtHtml = state.debts.map(function(d){
     var label = d.name + (d.id===priorityId && state.debtExtra>0 ? ' + extra' : '');
+    var dPaid = !!debtPaidTx(d.id, ym);
+    var dStatusPill = '<span class="pill '+(dPaid?'pill-positive':'pill-neutral')+'" data-debt-toggle="'+d.id+'" style="cursor:pointer;" title="'+(dPaid?'Paid — tap to mark unpaid again':'Tap to mark this month\'s payment as paid')+'">'+(dPaid?'Paid':'Due '+ordinal(effDay(d.dueDay||1, ym)))+'</span>';
     return '<div class="cat-row" style="grid-template-columns:170px 1fr 140px;"><div class="cat-name">'+esc(label)+'</div>'+
       '<div class="faint">'+d.apr+'% APR · '+usd0(d.balance)+' balance</div>'+
-      '<div class="cat-edit"><span class="pill pill-neutral">min/mo</span><span class="num" style="font-weight:600;">'+usd0(d.minPayment)+'</span></div></div>';
+      '<div class="cat-edit">'+dStatusPill+'<span class="num" style="font-weight:600;">'+usd0(d.minPayment)+'</span></div></div>';
   }).join('') + (state.debtExtra>0 ? '<div class="cat-row" style="grid-template-columns:170px 1fr 140px;"><div class="cat-name">Extra debt payment</div><div class="faint">applied to top-priority debt</div><div class="cat-edit num" style="justify-self:end; font-weight:600;">'+usd0(state.debtExtra)+'</div></div>' : '');
   var savingsHtml = state.savings.map(function(g){
     return '<div class="cat-row" style="grid-template-columns:1fr 140px;"><div class="cat-name">'+esc(g.name)+'</div><div class="cat-edit num" style="justify-self:end; font-weight:600;">'+usd0(g.monthly)+'</div></div>';
@@ -2368,10 +2411,94 @@ function renderIncome(){
 /* ============================================================
    VIEW: TRANSACTIONS
    ============================================================ */
+var editingTxId = null; // set while the Add-transaction form is showing/saving an EXISTING row instead of a new one
+// Transactions-table filters — reset on reload (like the trend-chart range toggle), never persisted, since
+// they're a view preference for browsing, not part of the household's actual data.
+var txFilters = {category:'', merchant:'', dateFrom:'', dateTo:'', amountMin:'', amountMax:''};
+function txFiltersActive(){
+  var f = txFilters;
+  return !!(f.category || f.merchant || f.dateFrom || f.dateTo || f.amountMin!=='' || f.amountMax!=='');
+}
+function txMatchesFilters(t){
+  var f = txFilters;
+  if (f.category && t.category !== f.category) return false;
+  if (f.merchant && (t.merchant||'').toLowerCase().indexOf(f.merchant.toLowerCase()) < 0) return false;
+  if (f.dateFrom && t.date < f.dateFrom) return false;
+  if (f.dateTo && t.date > f.dateTo) return false;
+  if (f.amountMin!=='' && Math.abs(t.amount) < parseFloat(f.amountMin)) return false;
+  if (f.amountMax!=='' && Math.abs(t.amount) > parseFloat(f.amountMax)) return false;
+  return true;
+}
+function txRowHtml(t){
+  var sign = t.type==='income'?'+':'–';
+  var color = t.type==='income'?'var(--positive)':'var(--ink)';
+  var dotColor = t.type==='income' ? 'var(--positive)' : catChartColor(t.category);
+  return '<tr'+(t.id===editingTxId?' style="background:var(--accent-soft);"':'')+'><td class="num" data-label="Date">'+t.date+'</td><td data-label="Merchant"><span class="dot" style="background:'+dotColor+'; margin-right:8px;"></span>'+esc(t.merchant)+(t.auto?' <span class="pill pill-neutral" style="margin-left:4px;">auto</span>':'')+'</td>'+
+    '<td data-label="Category">'+categoryEmoji(t.category)+' '+esc(t.category)+'</td><td class="faint" data-label="Note">'+(t.note?esc(t.note):'')+'</td>'+
+    '<td class="amt" data-label="Amount" style="color:'+color+'; font-weight:700;">'+sign+' '+fmtTxAmount(t)+'</td>'+
+    '<td class="amt" data-label="Actions"><button class="btn btn-ghost remove-x-btn" data-tx-edit="'+t.id+'" title="Edit transaction" style="margin-right:2px;">'+ic('edit')+'</button><button class="btn btn-ghost remove-x-btn" data-tx-remove="'+t.id+'" title="Delete transaction">&times;</button></td></tr>';
+}
+// The table + its "showing N of M" note + the delete button are rebuilt on their own (not the whole page)
+// whenever a filter changes, so the filter inputs themselves never lose focus mid-keystroke.
+function txTableSectionHtml(tx, totalThisMonth){
+  var filtersActive = txFiltersActive();
+  return (filtersActive ? '<div class="faint" style="padding:0 16px 8px;">Showing '+tx.length+' of '+totalThisMonth+' transaction'+(totalThisMonth===1?'':'s')+' this month.</div>' : '')+
+    (tx.length ? '<div style="padding:0 16px 8px; text-align:right;"><button class="btn btn-ghost btn-sm" id="tx-delete-all-btn" title="Delete the transactions listed below — handy to recover from a bad PDF/CSV import" style="color:var(--negative);">'+ic('trash')+' Delete '+(filtersActive?'shown':'all')+' ('+tx.length+')</button></div>' : '')+
+    '<div class="table-wrap"><table>'+
+    '<thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Note</th><th class="amt">Amount</th><th></th></tr></thead>'+
+    '<tbody>'+ (tx.length ? tx.map(txRowHtml).join('') : '<tr><td colspan="6" class="empty">'+(filtersActive?'No transactions match these filters.':'No transactions yet this month.')+'</td></tr>') +
+    '</tbody></table></div>';
+}
+// Wires the edit/delete/delete-all controls inside #tx-table-section. Called both after a full renderTransactions()
+// and after refreshTxTable() rebuilds just that section (e.g. when a filter changes) — keeping it in one place
+// means the two call sites can never drift out of sync with each other.
+function wireTxTableSection(){
+  Array.prototype.forEach.call(document.querySelectorAll('[data-tx-edit]'), function(btn){
+    btn.addEventListener('click', function(){
+      editingTxId = btn.getAttribute('data-tx-edit');
+      route();
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-tx-remove]'), function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-tx-remove');
+      var t = state.transactions.find(function(x){ return x.id===id; });
+      confirmDelete('Remove the '+(t?usd0(t.amount)+' '+esc(t.merchant):'transaction')+' entry'+(t&&t.date?' from '+t.date:'')+'? If this was a bill or loan payment, it goes back to unpaid.', function(){
+        state.transactions = state.transactions.filter(function(x){ return x.id!==id; });
+        if (editingTxId===id) editingTxId = null;
+        persist(); toast('Transaction removed'); route();
+      });
+    });
+  });
+  var deleteAllBtn = document.getElementById('tx-delete-all-btn');
+  if (deleteAllBtn) deleteAllBtn.addEventListener('click', function(){
+    var ym = state.month;
+    var monthTx = txForMonth(ym).filter(txMatchesFilters);
+    var count = monthTx.length;
+    var filtered = txFiltersActive();
+    confirmDelete('Delete '+(filtered?'the '+count+' filtered':'all '+count)+' transaction'+(count===1?'':'s')+' shown for '+monthLabel(ym)+'? Useful if a statement import read something wrong — any bills or loan payments in this list go back to unpaid. This can\'t be undone.', function(){
+      var idsToRemove = {}; monthTx.forEach(function(t){ idsToRemove[t.id] = true; });
+      state.transactions = state.transactions.filter(function(x){ return !idsToRemove[x.id]; });
+      if (editingTxId && idsToRemove[editingTxId]) editingTxId = null;
+      persist(); toast(count+' transaction'+(count===1?'':'s')+' deleted'); route();
+    });
+  });
+}
+// Re-renders ONLY the transactions table (not the whole page) when a filter input changes, so the filter
+// controls — which live outside #tx-table-section — never lose keyboard focus mid-keystroke.
+function refreshTxTable(){
+  var ym = state.month;
+  var allTx = txForMonth(ym).slice().sort(function(a,b){ return b.date.localeCompare(a.date); });
+  var tx = allTx.filter(txMatchesFilters);
+  var section = document.getElementById('tx-table-section');
+  if (!section) return;
+  section.innerHTML = txTableSectionHtml(tx, allTx.length);
+  wireTxTableSection();
+}
 function renderTransactions(){
   var ym = state.month;
-  var tx = txForMonth(ym).slice().sort(function(a,b){ return b.date.localeCompare(a.date); });
-  var notedTx = tx.filter(function(t){ return t.note; });
+  var allTx = txForMonth(ym).slice().sort(function(a,b){ return b.date.localeCompare(a.date); });
+  var notedTx = allTx.filter(function(t){ return t.note; });
   var notedTxHtml = notedTx.map(function(t){
     var dotColor = t.type==='income' ? 'var(--positive)' : catChartColor(t.category);
     return '<div class="hstack" style="justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid var(--line);">'+
@@ -2381,19 +2508,30 @@ function renderTransactions(){
       '<span class="num" style="font-size:12.5px; flex:none;">'+usd0(t.amount)+'</span>'+
     '</div>';
   }).join('');
+  var tx = allTx.filter(txMatchesFilters);
+  var editingTx = editingTxId ? state.transactions.find(function(t){ return t.id===editingTxId; }) : null;
+  var txCategories = Array.prototype.filter.call(
+    allTx.map(function(t){ return t.category; }).reduce(function(seen,c){ if (seen.indexOf(c)<0) seen.push(c); return seen; }, []).sort(),
+    function(c){ return !!c; }
+  );
+  var typeLabels = {variable:'Variable expense', bill:'Bill payment', debt:'Debt / loan payment', savings:'Savings transfer', income:'Income'};
+  var formType = editingTx ? editingTx.type : 'variable';
+  var formCcy = (editingTx && editingTx.currency) || baseCcy();
 
   return '<div class="view">'+
     '<div class="card card-pad" style="margin-bottom:16px;">'+
-      '<div class="card-title">Add a transaction</div>'+
-      '<div class="form-row">'+
-        '<div class="field"><label>Date</label><input type="date" id="tx-date" value="'+state.today+'"></div>'+
+      '<div class="hstack" style="justify-content:space-between;"><div class="card-title" style="margin-bottom:0;">'+(editingTx?'Edit transaction':'Add a transaction')+'</div>'+
+        (editingTx?'<button type="button" class="btn btn-ghost btn-sm" id="tx-cancel-edit-btn">Cancel edit</button>':'')+
+      '</div>'+
+      '<div class="form-row" style="margin-top:10px;">'+
+        '<div class="field"><label>Date</label><input type="date" id="tx-date" value="'+(editingTx?editingTx.date:state.today)+'"></div>'+
         '<div class="field"><label>Type</label><select id="tx-type">'+
-          '<option value="variable">Variable expense</option><option value="bill">Bill payment</option><option value="debt">Debt / loan payment</option>'+
-          '<option value="savings">Savings transfer</option><option value="income">Income</option></select></div>'+
+          ['variable','bill','debt','savings','income'].map(function(v){ return '<option value="'+v+'"'+(formType===v?' selected':'')+'>'+typeLabels[v]+'</option>'; }).join('')+
+        '</select></div>'+
       '</div>'+
       '<div class="form-row" style="margin-top:12px;">'+
-        '<div class="field"><label>Merchant <span class="faint" style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label><input type="text" id="tx-merchant" placeholder="e.g. Trader Joe’s — leave blank to just use the category"></div>'+
-        '<div class="field"><label>Amount</label><div class="fx-row"><select id="tx-currency">'+ Object.keys(CURRENCIES).map(function(c){ return '<option value="'+c+'" '+(c===baseCcy()?'selected':'')+'>'+c+'</option>'; }).join('') +'</select><span class="money-field" id="tx-amount-money" style="display:flex; flex:1;"><input type="number" min="0" step="0.01" id="tx-amount" placeholder="0.00"></span></div></div>'+
+        '<div class="field"><label>Merchant <span class="faint" style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label><input type="text" id="tx-merchant" placeholder="e.g. Trader Joe’s — leave blank to just use the category" value="'+(editingTx?esc(editingTx.merchant):'')+'"></div>'+
+        '<div class="field"><label>Amount</label><div class="fx-row"><select id="tx-currency">'+ Object.keys(CURRENCIES).map(function(c){ return '<option value="'+c+'" '+(c===formCcy?'selected':'')+'>'+c+'</option>'; }).join('') +'</select><span class="money-field" id="tx-amount-money" style="display:flex; flex:1;"><input type="number" min="0" step="0.01" id="tx-amount" placeholder="0.00" value="'+(editingTx?editingTx.amount:'')+'"></span></div></div>'+
       '</div>'+
       '<div class="form-row" id="tx-linked-row" style="margin-top:12px;" hidden>'+
         '<div class="field" style="grid-column:1/-1;"><label id="tx-linked-label">Which bill is this?</label><select id="tx-linked-select"></select>'+
@@ -2401,17 +2539,17 @@ function renderTransactions(){
         '</div>'+
       '</div>'+
       '<div class="form-row" style="margin-top:12px;">'+
-        '<div class="field" style="grid-column:1/-1;"><label>Category</label>'+categoryPickerHtml('data-tx-cat','1','')+'</div>'+
+        '<div class="field" style="grid-column:1/-1;"><label>Category</label>'+categoryPickerHtml('data-tx-cat','1', editingTx?editingTx.category:'')+'</div>'+
       '</div>'+
       '<div class="form-row" style="margin-top:12px;">'+
-        '<div class="field" style="grid-column:1/-1;"><label>Note <span class="faint" style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label><input type="text" id="tx-note" placeholder="e.g. split with roommate, work lunch"></div>'+
+        '<div class="field" style="grid-column:1/-1;"><label>Note <span class="faint" style="font-weight:400; text-transform:none; letter-spacing:0;">(optional)</span></label><input type="text" id="tx-note" placeholder="e.g. split with roommate, work lunch" value="'+(editingTx&&editingTx.note?esc(editingTx.note):'')+'"></div>'+
       '</div>'+
       '<div class="hstack" id="tx-fx-row" hidden style="margin-top:10px; gap:8px;">'+
         '<label style="margin:0;">Exchange rate to '+baseCcy()+'</label>'+
-        '<input type="number" min="0" step="0.0001" id="tx-fxrate" placeholder="e.g. 1.09" style="width:110px;">'+
+        '<input type="number" min="0" step="0.0001" id="tx-fxrate" placeholder="e.g. 1.09" style="width:110px;" value="'+(editingTx&&editingTx.fxRate?editingTx.fxRate:'')+'">'+
       '</div>'+
       '<div class="fx-note" id="tx-fx-note" hidden>We’ll look up today’s rate automatically — you can always edit it.</div>'+
-      '<div style="margin-top:14px;"><button class="btn btn-primary" id="tx-add-btn">'+ic('plus')+' Add transaction</button></div>'+
+      '<div style="margin-top:14px;"><button class="btn btn-primary" id="tx-add-btn">'+(editingTx?ic('check')+' Save changes':ic('plus')+' Add transaction')+'</button></div>'+
       '<div class="faint" style="margin-top:8px;">New transactions are auto-tagged “auto-categorized” to mirror bank-sync behavior in the full product.</div>'+
     '</div>'+
     (notedTxHtml ? '<div class="card card-pad" style="margin-bottom:16px;">'+
@@ -2442,20 +2580,20 @@ function renderTransactions(){
     '<div class="card">'+
       '<div class="hstack" style="justify-content:space-between; padding:14px 16px 0;">'+
         '<div class="card-title" style="margin-bottom:0;">Transactions — '+monthLabel(ym)+'</div>'+
-        (tx.length ? '<button class="btn btn-ghost btn-sm" id="tx-delete-all-btn" title="Delete every transaction shown below for this month — handy to recover from a bad PDF/CSV import" style="color:var(--negative);">'+ic('trash')+' Delete all ('+tx.length+')</button>' : '')+
       '</div>'+
-      '<div class="table-wrap"><table>'+
-      '<thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Note</th><th class="amt">Amount</th><th></th></tr></thead>'+
-      '<tbody>'+ (tx.length ? tx.map(function(t){
-        var sign = t.type==='income'?'+':'–';
-        var color = t.type==='income'?'var(--positive)':'var(--ink)';
-        var dotColor = t.type==='income' ? 'var(--positive)' : catChartColor(t.category);
-        return '<tr><td class="num" data-label="Date">'+t.date+'</td><td data-label="Merchant"><span class="dot" style="background:'+dotColor+'; margin-right:8px;"></span>'+esc(t.merchant)+(t.auto?' <span class="pill pill-neutral" style="margin-left:4px;">auto</span>':'')+'</td>'+
-          '<td data-label="Category">'+categoryEmoji(t.category)+' '+esc(t.category)+'</td><td class="faint" data-label="Note">'+(t.note?esc(t.note):'')+'</td>'+
-          '<td class="amt" data-label="Amount" style="color:'+color+'; font-weight:700;">'+sign+' '+fmtTxAmount(t)+'</td>'+
-          '<td class="amt" data-label="Delete"><button class="btn btn-ghost remove-x-btn" data-tx-remove="'+t.id+'" title="Delete transaction">&times;</button></td></tr>';
-      }).join('') : '<tr><td colspan="6" class="empty">No transactions yet this month.</td></tr>') +
-      '</tbody></table></div></div>'+
+      '<div class="hstack" style="gap:8px; flex-wrap:wrap; padding:10px 16px 0;">'+
+        '<select id="tx-filter-category" style="max-width:170px;"><option value="">All categories</option>'+
+          txCategories.map(function(c){ return '<option value="'+esc(c)+'"'+(txFilters.category===c?' selected':'')+'>'+categoryEmoji(c)+' '+esc(c)+'</option>'; }).join('')+
+        '</select>'+
+        '<input type="text" id="tx-filter-merchant" placeholder="Merchant contains…" style="max-width:150px;" value="'+esc(txFilters.merchant)+'">'+
+        '<input type="date" id="tx-filter-datefrom" title="From date" style="max-width:145px;" value="'+txFilters.dateFrom+'">'+
+        '<input type="date" id="tx-filter-dateto" title="To date" style="max-width:145px;" value="'+txFilters.dateTo+'">'+
+        '<input type="number" id="tx-filter-amountmin" placeholder="Min $" style="max-width:80px;" value="'+txFilters.amountMin+'">'+
+        '<input type="number" id="tx-filter-amountmax" placeholder="Max $" style="max-width:80px;" value="'+txFilters.amountMax+'">'+
+        '<button type="button" class="btn btn-ghost btn-sm" id="tx-filter-clear">Clear filters</button>'+
+      '</div>'+
+      '<div id="tx-table-section">'+txTableSectionHtml(tx, allTx.length)+'</div>'+
+    '</div>'+
   '</div>';
 }
 
@@ -2941,28 +3079,9 @@ function autoDetectAmountSignMode(){
   });
   csvAmountSignMode = pos>neg ? 'positive-expense' : 'negative-expense';
 }
-// A dropdown asking "which of these two apply?" reads as a decision the user has to make every time they
-// import — but the app already commits to ONE convention via the majority vote above, so this just states
-// what was decided as a plain sentence, with a one-click "flip it" fix-it for the rare case the guess is
-// wrong. No decision to make unless something actually looks off.
-function csvSignSummaryHtml(){
-  var isPositive = csvAmountSignMode==='positive-expense';
-  var desc = isPositive ? 'positive numbers are money out (typical for credit cards)' : 'negative numbers are money out (typical for checking/debit accounts)';
-  return '<div class="faint" style="font-size:12.5px; line-height:1.5;">We read this statement as: <strong style="color:var(--ink);">'+desc+'</strong>. '+
-    '<button type="button" id="csv-sign-flip" class="link-btn">Doesn\'t look right? Flip it</button>'+
-    '</div>';
-}
-function wireCsvSignFlip(){
-  var flipBtn = document.getElementById('csv-sign-flip');
-  if (!flipBtn) return;
-  flipBtn.addEventListener('click', function(){
-    csvAmountSignMode = csvAmountSignMode==='positive-expense' ? 'negative-expense' : 'positive-expense';
-    var signWrap = document.getElementById('csv-sign-wrap');
-    if (signWrap) signWrap.innerHTML = csvSignSummaryHtml();
-    wireCsvSignFlip();
-    if (csvReviewRows.length) renderCSVReview(); // re-guess categories too — they depend on income/expense
-  });
-}
+// The majority-vote auto-detect above (autoDetectAmountSignMode) is trusted to just get this right without
+// surfacing it as a sentence the user has to read on every import — so there's no visible "we read this
+// statement as..." message and no manual flip control anymore; the detection still runs silently.
 function parseCSV(text){
   // minimal RFC4180-ish parser: handles quoted fields, escaped quotes, and commas/newlines inside quotes
   var rows = [], row = [], field = '', inQuotes = false;
@@ -3260,23 +3379,14 @@ function renderCSVMapping(){
   mapEl.innerHTML = '<div class="hstack" style="gap:10px; flex-wrap:wrap; margin-top:10px;">'+
       colSelect('date','Date')+ colSelect('merchant','Merchant / description')+ colSelect('amount','Amount')+
     '</div>'+
-    '<div class="field" id="csv-sign-wrap" style="margin-top:10px; max-width:420px;">'+
-      csvSignSummaryHtml()+
-    '</div>'+
     '<div class="hstack" style="gap:8px; margin-top:10px;"><button class="btn btn-primary" id="csv-preview-btn">Preview rows</button><button class="btn btn-ghost" id="csv-mapping-cancel-btn" type="button">Cancel</button></div>'+
     '<div id="csv-review"></div>';
   Array.prototype.forEach.call(mapEl.querySelectorAll('[data-csv-map]'), function(sel){
     sel.addEventListener('change', function(){
       csvImportMap[sel.getAttribute('data-csv-map')] = parseInt(sel.value);
-      if (sel.getAttribute('data-csv-map')==='amount'){
-        autoDetectAmountSignMode();
-        var signWrap = document.getElementById('csv-sign-wrap');
-        if (signWrap) signWrap.innerHTML = csvSignSummaryHtml();
-        wireCsvSignFlip();
-      }
+      if (sel.getAttribute('data-csv-map')==='amount') autoDetectAmountSignMode();
     });
   });
-  wireCsvSignFlip();
   var btn = document.getElementById('csv-preview-btn');
   if (btn) btn.addEventListener('click', renderCSVReview);
   var mappingCancelBtn = document.getElementById('csv-mapping-cancel-btn');
@@ -3312,6 +3422,12 @@ function renderCSVReview(){
       isCardPayment: isCardPayment, checked: !isNaN(amt) && amt!==0 && !isCardPayment
     };
   }).filter(function(r){ return r.amount>0; });
+  renderCSVReviewDOM();
+}
+// Re-renders the review list from whatever csvReviewRows CURRENTLY holds, without recomputing categories
+// from the raw import data — used after a manual category pick (with same-merchant propagation) so that
+// edit isn't silently thrown away and replaced with a fresh guess the next time the list redraws.
+function renderCSVReviewDOM(){
   var reviewEl = document.getElementById('csv-review');
   if (!reviewEl) return;
   var estimatedCount = csvReviewRows.filter(function(t){ return t.estimated; }).length;
@@ -3340,6 +3456,17 @@ function renderCSVReview(){
     if (!r) return;
     r.category = category || 'Other';
     r.estimated = false; // once the user has touched it, it's confirmed, not a guess anymore
+    // Fixing one row's category almost always means every OTHER row from that same merchant in this
+    // import belongs there too — a shop doesn't sell groceries on one line and something else on the
+    // next — so re-categorizing one row auto-applies the same category to every other row here that
+    // shares its merchant, instead of making the user repeat the same click line by line.
+    var key = normalizeMerchantKey(r.merchant);
+    var propagated = 0;
+    if (key) csvReviewRows.forEach(function(other){
+      if (other.id===r.id || normalizeMerchantKey(other.merchant)!==key) return;
+      if (other.category!==r.category || other.estimated){ other.category = r.category; other.estimated = false; propagated++; }
+    });
+    if (propagated){ renderCSVReviewDOM(); return; }
     var note = reviewEl.querySelector('[data-csv-est-note="'+r.id+'"]');
     if (note) note.style.display = 'none';
   });
@@ -3603,17 +3730,21 @@ function paintCharts(view){
       var wfYm = state.month;
       var wfIncome = typeSpentForMonth(wfYm,'income');
       var wfRunning = wfIncome;
+      // Every category used to get its own distinct hue (rainbow-ish and hard to read as one flow at a
+      // glance) — now every step that's money LEAVING is a shade of the same red, so the eye reads
+      // "green in, shades of red out, green (or red) left over" instead of decoding six unrelated colors.
+      var wfSpendShades = [negative, hexToRgba(negative,0.78), hexToRgba(negative,0.58), hexToRgba(negative,0.4)];
       var wfSteps = [ {name:'Income', range:[0, wfIncome], amount:wfIncome, color:positive} ];
       function wfDrop(name, amt, color){
         var from = wfRunning - amt;
         wfSteps.push({name:name, range:[from, wfRunning], amount:-amt, color:color});
         wfRunning = from;
       }
-      wfDrop('Bills', typeSpentForMonth(wfYm,'bill'), catChartColor('Bills'));
-      wfDrop('Variable', typeSpentForMonth(wfYm,'variable'), catChartColor('Other Variable'));
-      wfDrop('Debt', typeSpentForMonth(wfYm,'debt'), catChartColor('Debt Payments'));
-      wfDrop('Savings', typeSpentForMonth(wfYm,'savings'), catChartColor('Savings'));
-      var wfLeftoverColor = wfRunning>=0 ? accent : negative;
+      wfDrop('Bills', typeSpentForMonth(wfYm,'bill'), wfSpendShades[0]);
+      wfDrop('Variable', typeSpentForMonth(wfYm,'variable'), wfSpendShades[1]);
+      wfDrop('Debt', typeSpentForMonth(wfYm,'debt'), wfSpendShades[2]);
+      wfDrop('Savings', typeSpentForMonth(wfYm,'savings'), wfSpendShades[3]);
+      var wfLeftoverColor = wfRunning>=0 ? positive : negative;
       wfSteps.push({name:'Left over', range:[0, wfRunning], amount:wfRunning, color:wfLeftoverColor});
       // Draws each step's signed $ amount just above its bar — a floating bar chart alone doesn't say
       // "this step is -$X" without either this or a lot of extra hovering, and the whole point of a
@@ -3648,8 +3779,8 @@ function paintCharts(view){
       plugins:[waterfallLabelPlugin] });
       var legendWF = document.getElementById('legend-waterfall');
       if (legendWF) legendWF.innerHTML = chartLegendHtml([
-        {label:'Income', color:positive}, {label:'Bills', color:catChartColor('Bills')}, {label:'Variable expenses', color:catChartColor('Other Variable')},
-        {label:'Debt payments', color:catChartColor('Debt Payments')}, {label:'Savings', color:catChartColor('Savings')}, {label:'Left over', color:wfLeftoverColor}
+        {label:'Income', color:positive}, {label:'Bills', color:wfSpendShades[0]}, {label:'Variable expenses', color:wfSpendShades[1]},
+        {label:'Debt payments', color:wfSpendShades[2]}, {label:'Savings', color:wfSpendShades[3]}, {label:'Left over', color:wfLeftoverColor}
       ]);
     }
     var elBA = document.getElementById('chart-budgetactual');
@@ -3667,24 +3798,38 @@ function paintCharts(view){
       // attention are the first thing you see, not buried at the bottom of an alphabetical-ish list.
       baRows.sort(function(a,b){ return (b.actual-b.budgeted) - (a.actual-a.budgeted); });
       var baActualColors = baRows.map(function(r){ return r.actual > r.budgeted ? negative : positive; });
-      // Printing the actual $ amount right at the end of each bar means "which is which" never depends on
-      // matching a swatch color to a bar — the pale bar and its number, the solid colored bar and its own
-      // matching-colored number, sit right next to each other on every single row.
+      // "Where am I at" for each row is the gap between the two bars, not either number alone — so that
+      // gap gets spelled out directly ("+$120 over" / "$40 under"), right after the actual bar, instead of
+      // making you subtract two printed numbers yourself.
+      var baDeltaText = baRows.map(function(r){
+        var d = r.actual - r.budgeted;
+        if (Math.abs(d) < 0.5) return 'on budget';
+        return d > 0 ? ('+'+usd0(d)+' over') : (usd0(Math.abs(d))+' under');
+      });
+      // Printing the actual $ amount (and how far over/under budget it is) right at the end of each bar
+      // means "which is which" never depends on matching a swatch color to a bar — the pale bar and its
+      // number, the solid colored bar and its own matching-colored number + status, sit right next to
+      // each other on every single row.
       var baLabelPlugin = {
         id:'baLabels',
         afterDatasetsDraw: function(chart){
           var ctx = chart.ctx, metaBudget = chart.getDatasetMeta(0), metaActual = chart.getDatasetMeta(1);
           ctx.save();
-          ctx.font = "600 10.5px 'IBM Plex Mono', monospace";
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
           metaBudget.data.forEach(function(bar, i){
+            ctx.font = "600 10.5px 'IBM Plex Mono', monospace";
             ctx.fillStyle = inkFaint;
             ctx.fillText(usd0(baRows[i].budgeted), bar.x + 6, bar.y);
           });
           metaActual.data.forEach(function(bar, i){
+            ctx.font = "600 10.5px 'IBM Plex Mono', monospace";
             ctx.fillStyle = baActualColors[i];
-            ctx.fillText(usd0(baRows[i].actual), bar.x + 6, bar.y);
+            var actualText = usd0(baRows[i].actual);
+            ctx.fillText(actualText, bar.x + 6, bar.y);
+            var actualW = ctx.measureText(actualText).width;
+            ctx.font = "600 9.5px 'Public Sans', sans-serif";
+            ctx.fillText(' · '+baDeltaText[i], bar.x + 6 + actualW, bar.y);
           });
           ctx.restore();
         }
@@ -3696,8 +3841,11 @@ function paintCharts(view){
           {label:'Actual', data: baRows.map(function(r){ return r.actual; }), backgroundColor: baActualColors, borderRadius:4, maxBarThickness:14}
         ]
       }, options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
-        layout:{ padding:{ right:56 } },
-        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:function(ctx){ return ' '+ctx.dataset.label+': '+usd0(ctx.parsed.x); } } } },
+        layout:{ padding:{ right:112 } },
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{
+          label:function(ctx){ return ' '+ctx.dataset.label+': '+usd0(ctx.parsed.x); },
+          afterBody:function(items){ var i = items[0].dataIndex; return 'Status: '+baDeltaText[i]; }
+        } } },
         scales:{ x:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, y:{ grid:{display:false}, border:{display:false} } } },
       plugins:[baLabelPlugin] });
       var legendBA = document.getElementById('legend-budgetactual');
@@ -4105,6 +4253,7 @@ function wireView(view){
   }
 
   if (view==='budget'){
+    wireBillDebtToggles();
     var billsToggleBtn = document.getElementById('bills-toggle-expand');
     if (billsToggleBtn) billsToggleBtn.addEventListener('click', function(){ billsExpanded = !billsExpanded; route(); });
     Array.prototype.forEach.call(document.querySelectorAll('[data-bill-field]'), function(el){
@@ -4180,15 +4329,21 @@ function wireView(view){
         }
       });
     }
-    function syncFxVisibility(){
+    function syncFxVisibility(opts){
       var isForeign = ccySelect.value !== baseCcy();
       fxRow.hidden = !isForeign; fxNote.hidden = !isForeign;
       // the Amount field's $ prefix always reflects whichever currency is actually selected, not just the household default
       if (amountMoneyWrap) amountMoneyWrap.style.setProperty('--money-symbol', JSON.stringify(ccySymbol(ccySelect.value)));
-      if (isForeign) tryAutoFetchRate();
+      if (isForeign){
+        // Loading an existing transaction into the form for editing already has its own recorded rate —
+        // a fresh live lookup would silently overwrite that recorded rate with today's, which isn't what
+        // "edit this transaction" should do unless the user changes the currency themselves.
+        if (opts && opts.preserveRate) setFxNote('Rate recorded for this transaction: 1 '+ccySelect.value+' = '+(fxRateInput?fxRateInput.value:'')+' '+baseCcy()+'. Edit it if needed.');
+        else tryAutoFetchRate();
+      }
     }
     if (ccySelect){
-      syncFxVisibility();
+      syncFxVisibility({preserveRate: !!editingTxId});
       ccySelect.addEventListener('change', syncFxVisibility);
       var dateElForFx = document.getElementById('tx-date');
       if (dateElForFx) dateElForFx.addEventListener('change', function(){ if (ccySelect.value !== baseCcy()) tryAutoFetchRate(); });
@@ -4224,6 +4379,12 @@ function wireView(view){
       }
     }
     refreshLinkedSelect();
+    // Loading an existing bill/debt transaction into the form for editing should show which one it was
+    // already linked to, not reset back to "not linked" every time you open the edit form.
+    (function(){
+      var editingTx = editingTxId ? state.transactions.find(function(t){ return t.id===editingTxId; }) : null;
+      if (editingTx && (editingTx.billId || editingTx.debtId)) linkedSelect.value = editingTx.billId || editingTx.debtId || '';
+    })();
     typeSelect.addEventListener('change', refreshLinkedSelect);
     linkedSelect.addEventListener('change', function(){
       var merchantInput = document.getElementById('tx-merchant');
@@ -4253,6 +4414,19 @@ function wireView(view){
         if (!fxRate || fxRate<=0){ toast('Enter (or estimate) the exchange rate to '+baseCcy()); return; }
         baseAmount = amount * fxRate;
       }
+      var editingTx = editingTxId ? state.transactions.find(function(t){ return t.id===editingTxId; }) : null;
+      if (editingTx){
+        editingTx.date = date; editingTx.merchant = merchant; editingTx.category = category; editingTx.amount = amount; editingTx.type = type;
+        delete editingTx.note; if (note) editingTx.note = note;
+        delete editingTx.currency; delete editingTx.fxRate; delete editingTx.baseAmount;
+        if (currency !== baseCcy()){ editingTx.currency = currency; editingTx.fxRate = fxRate; editingTx.baseAmount = baseAmount; }
+        delete editingTx.billId; delete editingTx.debtId;
+        if (type==='bill' && linkedSelect.value) editingTx.billId = linkedSelect.value;
+        if (type==='debt' && linkedSelect.value) editingTx.debtId = linkedSelect.value;
+        editingTxId = null;
+        persist(); toast('Transaction updated'); route();
+        return;
+      }
       var row = {id:'t'+Date.now(), date:date, merchant:merchant, category:category, amount:amount, type:type, account:'acc-checking', auto:false};
       if (note) row.note = note;
       if (currency !== baseCcy()){ row.currency = currency; row.fxRate = fxRate; row.baseAmount = baseAmount; }
@@ -4261,72 +4435,36 @@ function wireView(view){
       state.transactions.push(row);
       persist(); toast('Transaction added'); route();
     });
+    var cancelEditBtn = document.getElementById('tx-cancel-edit-btn');
+    if (cancelEditBtn) cancelEditBtn.addEventListener('click', function(){ editingTxId = null; route(); });
     var csvBtn = document.getElementById('csv-read-btn');
     if (csvBtn) csvBtn.addEventListener('click', handleCSVFile);
     var pdfBtn = document.getElementById('pdf-read-btn');
     if (pdfBtn) pdfBtn.addEventListener('click', handlePDFFile);
-    Array.prototype.forEach.call(document.querySelectorAll('[data-tx-remove]'), function(btn){
-      btn.addEventListener('click', function(){
-        var id = btn.getAttribute('data-tx-remove');
-        var t = state.transactions.find(function(x){ return x.id===id; });
-        confirmDelete('Remove the '+(t?usd0(t.amount)+' '+esc(t.merchant):'transaction')+' entry'+(t&&t.date?' from '+t.date:'')+'? If this was a bill or loan payment, it goes back to unpaid.', function(){
-          state.transactions = state.transactions.filter(function(x){ return x.id!==id; });
-          persist(); toast('Transaction removed'); route();
-        });
-      });
-    });
-    var deleteAllBtn = document.getElementById('tx-delete-all-btn');
-    if (deleteAllBtn) deleteAllBtn.addEventListener('click', function(){
-      var ym = state.month;
-      var monthTx = txForMonth(ym);
-      var count = monthTx.length;
-      confirmDelete('Delete all '+count+' transaction'+(count===1?'':'s')+' shown for '+monthLabel(ym)+'? Useful if a statement import read something wrong — any bills or loan payments in this list go back to unpaid. This can\'t be undone.', function(){
-        var idsToRemove = {}; monthTx.forEach(function(t){ idsToRemove[t.id] = true; });
-        state.transactions = state.transactions.filter(function(x){ return !idsToRemove[x.id]; });
-        persist(); toast(count+' transaction'+(count===1?'':'s')+' deleted'); route();
-      });
+    wireTxTableSection();
+
+    function applyTxFilterAndRefresh(){ refreshTxTable(); }
+    var filterCategoryEl = document.getElementById('tx-filter-category');
+    if (filterCategoryEl) filterCategoryEl.addEventListener('change', function(){ txFilters.category = filterCategoryEl.value; applyTxFilterAndRefresh(); });
+    var filterMerchantEl = document.getElementById('tx-filter-merchant');
+    if (filterMerchantEl) filterMerchantEl.addEventListener('input', function(){ txFilters.merchant = filterMerchantEl.value; applyTxFilterAndRefresh(); });
+    var filterDateFromEl = document.getElementById('tx-filter-datefrom');
+    if (filterDateFromEl) filterDateFromEl.addEventListener('change', function(){ txFilters.dateFrom = filterDateFromEl.value; applyTxFilterAndRefresh(); });
+    var filterDateToEl = document.getElementById('tx-filter-dateto');
+    if (filterDateToEl) filterDateToEl.addEventListener('change', function(){ txFilters.dateTo = filterDateToEl.value; applyTxFilterAndRefresh(); });
+    var filterAmountMinEl = document.getElementById('tx-filter-amountmin');
+    if (filterAmountMinEl) filterAmountMinEl.addEventListener('input', function(){ txFilters.amountMin = filterAmountMinEl.value; applyTxFilterAndRefresh(); });
+    var filterAmountMaxEl = document.getElementById('tx-filter-amountmax');
+    if (filterAmountMaxEl) filterAmountMaxEl.addEventListener('input', function(){ txFilters.amountMax = filterAmountMaxEl.value; applyTxFilterAndRefresh(); });
+    var filterClearEl = document.getElementById('tx-filter-clear');
+    if (filterClearEl) filterClearEl.addEventListener('click', function(){
+      txFilters = {category:'', merchant:'', dateFrom:'', dateTo:'', amountMin:'', amountMax:''};
+      route();
     });
   }
 
   if (view==='calendar'){
-    Array.prototype.forEach.call(document.querySelectorAll('[data-bill-toggle]'), function(el){
-      el.addEventListener('click', function(){
-        var billId = el.getAttribute('data-bill-toggle');
-        var ym = state.month;
-        var existing = billPaidTx(billId, ym);
-        var bill = state.bills.find(function(b){return b.id===billId;});
-        if (existing){
-          // matches this item's own tooltip ("click to undo") — deleting its paid transaction is the
-          // same action as removing it from the Transactions table, just reachable from the calendar too.
-          confirmDelete('Mark '+esc(bill?bill.name:'this bill')+' as unpaid again? This removes its paid transaction.', function(){
-            state.transactions = state.transactions.filter(function(x){ return x.id!==existing.id; });
-            persist(); toast((bill?bill.name:'Bill')+' marked unpaid'); route();
-          });
-          return;
-        }
-        var day = el.getAttribute('data-day');
-        state.transactions.push({id:'t'+Date.now(), date: ym+'-'+String(day).padStart(2,'0'), merchant:bill.name, category:bill.name, amount:bill.budgeted, type:'bill', billId:bill.id, account:'acc-checking', auto:false});
-        persist(); toast(bill.name+' marked paid'); route();
-      });
-    });
-    Array.prototype.forEach.call(document.querySelectorAll('[data-debt-toggle]'), function(el){
-      el.addEventListener('click', function(){
-        var debtId = el.getAttribute('data-debt-toggle');
-        var ym = state.month;
-        var existingDebtTx = debtPaidTx(debtId, ym);
-        var d = debtById(debtId);
-        if (existingDebtTx){
-          confirmDelete('Mark '+esc(d?d.name:'this loan')+'\'s payment as unpaid again? This removes its paid transaction.', function(){
-            state.transactions = state.transactions.filter(function(x){ return x.id!==existingDebtTx.id; });
-            persist(); toast((d?d.name:'Loan')+' payment marked unpaid'); route();
-          });
-          return;
-        }
-        var day = el.getAttribute('data-day');
-        state.transactions.push({id:'t'+Date.now(), date: ym+'-'+String(day).padStart(2,'0'), merchant:d.name+' payment', category:d.name, amount:d.minPayment, type:'debt', debtId:d.id, account:'acc-checking', auto:false});
-        persist(); toast(d.name+' payment marked paid'); route();
-      });
-    });
+    wireBillDebtToggles();
   }
 
   if (view==='debt'){
