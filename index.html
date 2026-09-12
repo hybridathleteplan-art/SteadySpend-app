@@ -516,7 +516,8 @@ td.amt, th.amt{text-align:right; font-family:var(--font-mono); font-variant-nume
 .account-switch .acct-row{display:flex; align-items:center; justify-content:space-between; gap:8px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.14); border-radius:8px; padding:8px 10px;}
 .account-switch .acct-email{color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11.5px;}
 .account-switch .acct-status{color:#B9C0CC; font-size:11px;}
-.account-switch button.link-btn{background:none; border:none; color:#EC8CA8; font-size:11.5px; font-weight:600; cursor:pointer; padding:0; text-decoration:underline;}
+.link-btn{background:none; border:none; color:var(--accent-strong); font-size:11.5px; font-weight:600; cursor:pointer; padding:0; text-decoration:underline;}
+.account-switch button.link-btn{color:#EC8CA8;}
 .account-switch .acct-signedout{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:2px 2px;}
 .auth-modal-backdrop{position:fixed; inset:0; background:rgba(20,14,18,.55); z-index:200; display:flex; align-items:center; justify-content:center; padding:20px;}
 .auth-modal{background:var(--surface); color:var(--ink); border-radius:14px; padding:24px; width:100%; max-width:360px; box-shadow:0 20px 60px rgba(0,0,0,.35);}
@@ -1216,16 +1217,20 @@ function fmtTxAmount(t){
 }
 
 // ---- Live exchange rates (Frankfurter API — free, no key, commercial use OK) ----
-// This only ever succeeds once Steadyspend is deployed to its own real hosting: the Claude Artifact
-// preview's content-security policy blocks outbound network calls, so inside claude.ai this will
-// always fall through to the manual-entry fallback below. That's by design, not a bug — the manual
-// field keeps working everywhere, and the automatic lookup just quietly takes over once it can.
+// This uses the transaction's OWN date (not "today") so a foreign-currency purchase from three weeks
+// ago converts at the rate that actually applied on that day, not today's rate. Frankfurter's dated
+// endpoint is /v1/YYYY-MM-DD (NOT /v2/ — that path 404s, which was silently sending every lookup
+// straight to the manual-entry fallback even on a real, fully-deployed, unblocked connection — a real
+// bug, not just the Claude-preview CSP limitation described below). Inside the Claude Artifact preview
+// itself, outbound network calls are still blocked by that preview's content-security policy, so the
+// automatic lookup can only be exercised once Steadyspend is running on its own real hosting — the
+// manual field stays as a fallback everywhere so entry never gets stuck either way.
 var fxRateCache = {}; // "FROM_TO_DATE" -> rate (session-only cache, avoids refetching the same pair)
 function fetchLiveRate(from, to, date){
   if (from === to) return Promise.resolve(1);
   var key = from+'_'+to+'_'+(date||'latest');
   if (fxRateCache[key] != null) return Promise.resolve(fxRateCache[key]);
-  var base = 'https://api.frankfurter.dev/v2/';
+  var base = 'https://api.frankfurter.dev/v1/';
   var url = base + (date ? date : 'latest') + '?base=' + encodeURIComponent(from) + '&symbols=' + encodeURIComponent(to);
   if (typeof fetch !== 'function') return Promise.resolve(null);
   var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -2157,7 +2162,8 @@ function addForm(id, title, fields, cta){
         }
         return f.dependsOnField ? ('<div'+depAttrs+depHidden+'>'+fieldHtml+'</div>') : fieldHtml;
       }).join('')+
-      '<div class="field"><button class="btn btn-primary" data-submit-form="'+id+'">'+cta+'</button></div>'+
+      '<div class="field hstack" style="gap:8px;"><button class="btn btn-primary" data-submit-form="'+id+'">'+cta+'</button>'+
+        '<button class="btn btn-ghost" type="button" data-cancel-form="'+id+'">Cancel</button></div>'+
     '</div>'+
   '</div>';
 }
@@ -2785,6 +2791,28 @@ function autoDetectAmountSignMode(){
   });
   csvAmountSignMode = pos>neg ? 'positive-expense' : 'negative-expense';
 }
+// A dropdown asking "which of these two apply?" reads as a decision the user has to make every time they
+// import — but the app already commits to ONE convention via the majority vote above, so this just states
+// what was decided as a plain sentence, with a one-click "flip it" fix-it for the rare case the guess is
+// wrong. No decision to make unless something actually looks off.
+function csvSignSummaryHtml(){
+  var isPositive = csvAmountSignMode==='positive-expense';
+  var desc = isPositive ? 'positive numbers are money out (typical for credit cards)' : 'negative numbers are money out (typical for checking/debit accounts)';
+  return '<div class="faint" style="font-size:12.5px; line-height:1.5;">We read this statement as: <strong style="color:var(--ink);">'+desc+'</strong>. '+
+    '<button type="button" id="csv-sign-flip" class="link-btn">Doesn\'t look right? Flip it</button>'+
+    '</div>';
+}
+function wireCsvSignFlip(){
+  var flipBtn = document.getElementById('csv-sign-flip');
+  if (!flipBtn) return;
+  flipBtn.addEventListener('click', function(){
+    csvAmountSignMode = csvAmountSignMode==='positive-expense' ? 'negative-expense' : 'positive-expense';
+    var signWrap = document.getElementById('csv-sign-wrap');
+    if (signWrap) signWrap.innerHTML = csvSignSummaryHtml();
+    wireCsvSignFlip();
+    if (csvReviewRows.length) renderCSVReview(); // re-guess categories too — they depend on income/expense
+  });
+}
 function parseCSV(text){
   // minimal RFC4180-ish parser: handles quoted fields, escaped quotes, and commas/newlines inside quotes
   var rows = [], row = [], field = '', inQuotes = false;
@@ -2834,16 +2862,22 @@ function significantMerchantWord(key){
 // YOU actually categorize things; this is just a sensible net under it. Keywords are matched against the
 // normalized merchant key, so they're already lowercase with punctuation collapsed to spaces.
 var COMMON_MERCHANT_CATEGORIES = [
-  {category:'Groceries', keywords:['trader joe','whole foods','safeway','kroger','albertsons','publix','aldi','costco','sams club','walmart','target','grocery','grocer','food lion','wegmans','stop shop','harris teeter','h e b','vons','ralphs','instacart']},
-  {category:'Dining Out', keywords:['starbucks','mcdonald','chipotle','subway','chick fil a','wendys','taco bell','burger king','dominos','pizza hut','panera','dunkin','tim hortons','doordash','uber eats','grubhub','postmates','restaurant','cafe','coffee','diner','bistro','bakery']},
-  {category:'Transportation', keywords:['uber','lyft','shell','chevron','exxon','mobil','conoco','arco','texaco','gas station','fuel','parking','transit','metro','mta','amtrak','car wash','auto repair','jiffy lube']},
-  {category:'Entertainment', keywords:['netflix','spotify','hulu','disney','hbo','youtube premium','apple music','apple tv','peloton','playstation','xbox','steam','cinema','theater','theatre','amc','regal']},
-  {category:'Utilities', keywords:['electric','power company','pg e','con edison','coned','duke energy','water utility','sewer','gas company','internet','comcast','xfinity','spectrum','fios','cox communications']},
-  {category:'Phone', keywords:['verizon wireless','t mobile','tmobile','sprint','att mobility','att wireless','mint mobile','cricket wireless']},
-  {category:'Shopping', keywords:['amazon','ebay','etsy','best buy','ikea','home depot','lowes','macys','nordstrom','tj maxx','marshalls','ross stores']},
-  {category:'Personal Care', keywords:['cvs','walgreens','rite aid','pharmacy','urgent care','dental','dentist','optometry','vision center','gym','fitness','planet fitness','la fitness','salon','barber','spa']},
-  {category:'Insurance', keywords:['insurance','geico','allstate','progressive ins','state farm']},
-  {category:'Salary', income:true, keywords:['payroll','direct deposit','salary','paycheck']}
+  {category:'Groceries', keywords:['trader joe','whole foods','safeway','kroger','albertsons','publix','aldi','costco','sams club','walmart','target','grocery','grocer','food lion','wegmans','stop shop','harris teeter','h e b','vons','ralphs','fry s','king soopers','smiths','qfc','winn dixie','giant food','sprouts','meijer','fred meyer','save a lot','instacart']},
+  {category:'Dining Out', keywords:['starbucks','peets coffee','dutch bros','mcdonald','chipotle','subway','chick fil a','wendys','taco bell','burger king','dominos','pizza hut','little caesars','papa johns','panera','dunkin','tim hortons','kfc','popeyes','arbys','sonic drive','panda express','chilis','applebees','olive garden','ihop','dennys','five guys','shake shack','in n out','jimmy johns','jersey mikes','firehouse subs','doordash','uber eats','grubhub','postmates','seamless','restaurant','cafe','coffee','diner','bistro','bakery','brewery','bar grill']},
+  {category:'Transportation', keywords:['uber','lyft','shell oil','chevron','exxon','mobil','conoco','arco','texaco','bp gas','sunoco','speedway','circle k','wawa','quiktrip','7 eleven','valero','marathon petroleum','gas station','fuel','parking','spothero','parkmobile','ez pass','ezpass','toll','transit','metro','mta','bart','amtrak','car wash','auto repair','jiffy lube','midas','pep boys','autozone','oreilly auto','discount tire']},
+  {category:'Entertainment', keywords:['netflix','spotify','hulu','disney plus','disney','hbo max','max streaming','paramount plus','peacock tv','youtube premium','youtube tv','apple music','apple tv','apple arcade','icloud storage','peloton','playstation','xbox live','nintendo','steam games','cinema','movie theater','theater','theatre','amc theatres','regal cinemas','cinemark','bowling','arcade','museum','zoo','concert','ticketmaster','stubhub']},
+  {category:'Utilities', keywords:['electric','power company','pg e','con edison','coned','duke energy','national grid','dominion energy','water utility','sewer','gas company','trash service','waste management','internet','comcast','xfinity','spectrum','fios','cox communications','centurylink','frontier communications']},
+  {category:'Phone', keywords:['verizon wireless','t mobile','tmobile','sprint','att mobility','att wireless','mint mobile','cricket wireless','boost mobile','metro pcs','visible wireless','google fi']},
+  {category:'Shopping', keywords:['amazon','ebay','etsy','best buy','ikea','home depot','lowes','ace hardware','macys','nordstrom','kohls','jcpenney','tj maxx','marshalls','ross stores','burlington','old navy','gap store','h and m','zara','uniqlo','forever 21','dollar tree','dollar general','five below','dicks sporting','rei co op','staples','office depot','bed bath','homegoods','container store','wayfair','michaels stores','hobby lobby','joann fabrics','barnes noble','sephora','ulta beauty']},
+  {category:'Personal Care', keywords:['cvs pharmacy','walgreens','rite aid','pharmacy','urgent care','dental','dentist','orthodontist','optometry','vision center','warby parker','gym membership','fitness','planet fitness','la fitness','equinox','crunch fitness','orangetheory','24 hour fitness','ymca','anytime fitness','salon','barber','spa treatment','massage']},
+  {category:'Insurance', keywords:['insurance','geico','allstate','progressive ins','state farm','liberty mutual','nationwide ins','usaa','farmers ins','metlife']},
+  {category:'Household', keywords:['maid service','cleaning service','lawn care','landscaping','pest control','handyman','plumber','plumbing','electrician','hvac service']},
+  {category:'Pets', keywords:['petsmart','petco','chewy','pet supplies','veterinary','vet clinic','animal hospital','pet grooming']},
+  {category:'Travel', keywords:['delta air','united airlines','american airlines','southwest airlines','jetblue','alaska airlines','spirit airlines','frontier airlines','airbnb','vrbo','marriott','hilton hotel','hyatt hotel','holiday inn','best western','expedia','booking com','priceline','hertz','avis rental','enterprise rent','budget rental','national car rental']},
+  {category:'Subscriptions', keywords:['microsoft','adobe creative','dropbox','google one','google storage','amazon prime','audible','kindle unlimited','patreon','substack','onlyfans','linkedin premium','nyt subscription','new york times','wall street journal']},
+  {category:'Education', keywords:['tuition','university','college','school district','student loan servicer','coursera','udemy','skillshare','duolingo']},
+  {category:'Salary', income:true, keywords:['payroll','direct deposit','salary','paycheck']},
+  {category:'Other income', income:true, keywords:['interest payment','dividend','cashback reward','cash back reward','tax refund']}
 ];
 function guessFromCommonMerchants(key, isIncome){
   for (var i=0;i<COMMON_MERCHANT_CATEGORIES.length;i++){
@@ -2854,6 +2888,19 @@ function guessFromCommonMerchants(key, isIncome){
     }
   }
   return null;
+}
+// A credit-card statement's "payment" line (paying down the balance) isn't a new expense OR new income —
+// it's just moving money to cover purchases that are either already logged individually elsewhere, or
+// about to be. Importing it as a transaction would double-count spending that's tracked another way, so
+// these rows are detected and excluded from import by default (still shown, still toggleable, in case
+// someone genuinely wants to log it as a debt payment instead).
+function isLikelyCardPaymentRow(merchantRaw){
+  var key = normalizeMerchantKey(merchantRaw);
+  if (!key) return false;
+  if (/\bpayment\b/.test(key) && /(thank you|received|autopay|auto pay|online|web|electronic|mobile|internet)/.test(key)) return true;
+  if (/^autopay/.test(key) || key==='autopay payment') return true;
+  if (/^(online|web|mobile|internet|electronic) payment$/.test(key)) return true;
+  return false;
 }
 function guessCategoryForMerchant(merchantRaw, isIncome){
   var fallback = isIncome ? 'Other income' : 'Other';
@@ -2925,7 +2972,7 @@ function allCategoryNames(){
   function add(c){ c = String(c||'').trim(); if (c && !seen[c]){ seen[c] = 1; list.push(c); } }
   state.bills.forEach(function(b){ add(b.name); });
   state.variable.forEach(function(v){ add(v.name); });
-  ['Groceries','Dining Out','Transportation','Entertainment','Utilities','Phone','Shopping','Personal Care','Insurance','Household'].forEach(add);
+  ['Groceries','Dining Out','Transportation','Entertainment','Utilities','Phone','Shopping','Personal Care','Insurance','Household','Travel','Subscriptions','Pets','Education'].forEach(add);
   add('Debt Payment'); add('Savings Transfer');
   state.income.forEach(function(i){ add(i.name); });
   add('Salary'); add('Freelance Income'); add('Other income');
@@ -3063,13 +3110,8 @@ function renderCSVMapping(){
   mapEl.innerHTML = '<div class="hstack" style="gap:10px; flex-wrap:wrap; margin-top:10px;">'+
       colSelect('date','Date')+ colSelect('merchant','Merchant / description')+ colSelect('amount','Amount')+
     '</div>'+
-    '<div class="field" style="margin-top:10px; max-width:420px;">'+
-      '<label>How does this statement show charges?</label>'+
-      '<select id="csv-sign-mode">'+
-        '<option value="negative-expense"'+(csvAmountSignMode==='negative-expense'?' selected':'')+'>Negative numbers = money out (most checking/debit accounts)</option>'+
-        '<option value="positive-expense"'+(csvAmountSignMode==='positive-expense'?' selected':'')+'>Positive numbers = money out (most credit cards)</option>'+
-      '</select>'+
-      '<div class="faint" style="margin-top:4px; font-size:11.5px;">We guessed based on the numbers in this file — flip it if your categories below look backwards (e.g. everyday purchases showing up as income).</div>'+
+    '<div class="field" id="csv-sign-wrap" style="margin-top:10px; max-width:420px;">'+
+      csvSignSummaryHtml()+
     '</div>'+
     '<div class="hstack" style="gap:8px; margin-top:10px;"><button class="btn btn-primary" id="csv-preview-btn">Preview rows</button><button class="btn btn-ghost" id="csv-mapping-cancel-btn" type="button">Cancel</button></div>'+
     '<div id="csv-review"></div>';
@@ -3078,16 +3120,13 @@ function renderCSVMapping(){
       csvImportMap[sel.getAttribute('data-csv-map')] = parseInt(sel.value);
       if (sel.getAttribute('data-csv-map')==='amount'){
         autoDetectAmountSignMode();
-        var signSel = document.getElementById('csv-sign-mode');
-        if (signSel) signSel.value = csvAmountSignMode;
+        var signWrap = document.getElementById('csv-sign-wrap');
+        if (signWrap) signWrap.innerHTML = csvSignSummaryHtml();
+        wireCsvSignFlip();
       }
     });
   });
-  var signModeSel = document.getElementById('csv-sign-mode');
-  if (signModeSel) signModeSel.addEventListener('change', function(){
-    csvAmountSignMode = signModeSel.value;
-    if (csvReviewRows.length) renderCSVReview(); // re-guess categories too — they depend on income/expense
-  });
+  wireCsvSignFlip();
   var btn = document.getElementById('csv-preview-btn');
   if (btn) btn.addEventListener('click', renderCSVReview);
   var mappingCancelBtn = document.getElementById('csv-mapping-cancel-btn');
@@ -3115,23 +3154,28 @@ function renderCSVReview(){
     var amt = parseFloat(rawAmt);
     var merchant = String(r[csvImportMap.merchant]||'Unknown').trim() || 'Unknown';
     var isIncome = isIncomeForAmount(amt);
-    var guess = guessCategoryForMerchant(merchant, isIncome);
+    var isCardPayment = isLikelyCardPaymentRow(merchant);
+    var guess = isCardPayment ? {category:'Debt Payment', estimated:false} : guessCategoryForMerchant(merchant, isIncome);
     return {
       id:'c'+i, date: normalizeCSVDate(r[csvImportMap.date]), merchant: merchant,
-      amount: Math.abs(amt)||0, type: isIncome ? 'income' : 'variable', category: guess.category, estimated: guess.estimated, checked: !isNaN(amt) && amt!==0
+      amount: Math.abs(amt)||0, type: isIncome ? 'income' : 'variable', category: guess.category, estimated: guess.estimated,
+      isCardPayment: isCardPayment, checked: !isNaN(amt) && amt!==0 && !isCardPayment
     };
   }).filter(function(r){ return r.amount>0; });
   var reviewEl = document.getElementById('csv-review');
   if (!reviewEl) return;
   var estimatedCount = csvReviewRows.filter(function(t){ return t.estimated; }).length;
+  var cardPaymentCount = csvReviewRows.filter(function(t){ return t.isCardPayment; }).length;
   reviewEl.innerHTML = '<div class="faint" style="margin:10px 0 4px;">'+csvReviewRows.length+' transaction'+(csvReviewRows.length===1?'':'s')+' ready — uncheck any you don’t want, fix a category, then import.'+
       (estimatedCount ? ' Categories marked <strong style="color:var(--ink);">Estimated</strong> are a best guess from your past transactions — check them and adjust if wrong.' : '')+
+      (cardPaymentCount ? ' Rows marked <strong style="color:var(--ink);">Card payment</strong> look like paying down a balance, not new spending — left unchecked so they aren’t double-counted with the purchases they cover.' : '')+
     '</div>'+
     '<div class="stack" style="gap:0; max-height:420px; overflow-y:auto;">' + csvReviewRows.map(function(t){
       return '<div class="hstack" style="justify-content:space-between; align-items:flex-start; gap:10px; padding:8px 0; border-bottom:1px solid var(--line);">'+
         '<input type="checkbox" data-csv-check="'+t.id+'" '+(t.checked?'checked':'')+' style="margin-top:3px; flex:none; width:16px; height:16px;">'+
         '<span style="flex:1; min-width:0;"><span style="font-weight:600;">'+esc(t.merchant)+'</span> <span class="faint">'+t.date+'</span>'+
           '<span data-csv-est-note="'+t.id+'" class="faint" style="display:'+(t.estimated?'inline':'none')+'; font-size:10.5px; color:var(--accent-strong); margin-left:6px;">Estimated — adjust if wrong</span>'+
+          (t.isCardPayment ? '<span data-csv-cardpay-note="'+t.id+'" class="faint" style="display:inline; font-size:10.5px; color:var(--negative); margin-left:6px;">Card payment — not counted as a transaction</span>' : '')+
           '<div style="max-width:220px; margin-top:4px;">'+categoryPickerHtml('data-csv-cat', t.id, t.category)+'</div></span>'+
         '<span class="num" style="flex:none; padding-top:3px; color:'+(t.type==='income'?'var(--positive)':'var(--ink)')+';">'+(t.type==='income'?'+ ':'– ')+usd2(t.amount)+'</span>'+
       '</div>';
@@ -3496,9 +3540,26 @@ function wireView(view){
     inp.addEventListener('input', function(){ preview.textContent = dayPreviewText(inp.value, state.month); });
   });
 
-  // generic add-forms (toggle + submit)
+  // generic add-forms (toggle + submit + cancel)
   Array.prototype.forEach.call(document.querySelectorAll('[data-toggle-form]'), function(btn){
     btn.addEventListener('click', function(){ var f=document.getElementById(btn.getAttribute('data-toggle-form')); f.hidden = !f.hidden; });
+  });
+  // A Cancel button next to every "Add" button — closes the form WITHOUT saving anything, and clears
+  // whatever was half-typed so reopening the form starts fresh instead of showing stale leftovers.
+  // This exists because the only prior way to back out was re-clicking the small "+ Add a ___" toggle
+  // button itself, which isn't an obvious "cancel" affordance while you're midway through filling a form.
+  Array.prototype.forEach.call(document.querySelectorAll('[data-cancel-form]'), function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-cancel-form');
+      var wrap = document.getElementById(id+'-form');
+      if (!wrap) return;
+      Array.prototype.forEach.call(wrap.querySelectorAll('[data-field]'), function(inp){
+        if (inp.tagName==='SELECT') inp.selectedIndex = 0; else inp.value = '';
+      });
+      // also clear any dependent-field sections back to their default hidden state
+      Array.prototype.forEach.call(wrap.querySelectorAll('[data-dep-field]'), function(depEl){ depEl.hidden = true; });
+      wrap.hidden = true;
+    });
   });
   // generic conditional fields (addForm's dependsOnField/dependsOnValue) — e.g. the add-bill form's
   // "Month" field only matters once "Yearly" is picked, so it stays hidden until then.
