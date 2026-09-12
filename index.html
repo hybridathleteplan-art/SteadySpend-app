@@ -3203,14 +3203,35 @@ function guessCategoryForMerchant(merchantRaw, isIncome){
 }
 
 /* ================= CATEGORY PICKER (emoji + real <select>, used anywhere a category is chosen) ================= */
+// Deliberately broad — covers every category the built-in merchant dictionary can guess PLUS the common
+// categories people type in themselves (Medical, Clothing, etc.), so a real 🏷️ fallback is rare, not the norm.
 var CATEGORY_EMOJI = {
-  'groceries':'🛒', 'dining out':'🍽️', 'restaurants':'🍽️', 'transportation':'🚗', 'gas':'⛽', 'fuel':'⛽',
-  'entertainment':'🎬', 'streaming bundle':'📺', 'streaming':'📺', 'utilities':'💡', 'electric':'💡',
-  'internet':'📶', 'phone':'📱', 'water':'🚿', 'shopping':'🛍️', 'personal care':'🧴', 'insurance':'🛡️',
-  'rent':'🏠', 'mortgage':'🏠', 'housing':'🏠', 'household':'🧹', 'car payment':'🚗', 'car':'🚗',
-  'salary':'💼', 'freelance income':'💻', 'other income':'➕', 'debt payment':'💳', 'savings transfer':'💰',
-  'vacation':'✈️', 'travel':'✈️', 'education':'🎓', 'gifts':'🎁', 'health':'🩺', 'fitness':'🏋️',
-  'pets':'🐾', 'kids':'🧒', 'subscriptions':'🔁', 'other':'🏷️'
+  'groceries':'🛒', 'dining out':'🍽️', 'restaurants':'🍽️', 'coffee':'☕',
+  'transportation':'🚗', 'gas':'⛽', 'fuel':'⛽', 'parking':'🅿️', 'tolls':'🛣️', 'public transit':'🚌', 'ride share':'🚕', 'car maintenance':'🔧', 'car repair':'🔧',
+  'entertainment':'🎬', 'streaming bundle':'📺', 'streaming':'📺', 'music':'🎵', 'books':'📚', 'hobbies':'🎨', 'sports':'⚽', 'gaming':'🎮',
+  'utilities':'💡', 'electric':'💡', 'internet':'📶', 'phone':'📱', 'water':'🚿', 'trash':'🗑️',
+  'shopping':'🛍️', 'clothing':'👕', 'electronics':'🖥️', 'furniture':'🛋️', 'beauty':'💄',
+  'personal care':'🧴', 'medical':'💊', 'health':'🩺', 'dental':'🦷', 'vision':'👓', 'fitness':'🏋️', 'gym':'🏋️',
+  'insurance':'🛡️',
+  'rent':'🏠', 'mortgage':'🏠', 'housing':'🏠', 'house':'🏠', 'home improvement':'🔨', 'repairs':'🔨',
+  'household':'🧹', 'cleaning':'🧼', 'laundry':'🧺',
+  'car payment':'🚗', 'car':'🚗',
+  'salary':'💼', 'freelance income':'💻', 'other income':'➕', 'bonus':'🎉',
+  'debt payment':'💳', 'credit card':'💳', 'loan':'🏦', 'bank fees':'🏦', 'fees':'🏦',
+  'savings transfer':'💰', 'emergency fund':'🆘', 'savings':'💰',
+  'vacation':'✈️', 'travel':'✈️', 'flights':'✈️', 'hotel':'🏨',
+  'education':'🎓', 'tuition':'🎓', 'school supplies':'✏️',
+  'gifts':'🎁', 'donations':'❤️', 'charity':'❤️',
+  'pets':'🐾', 'vet':'🐾',
+  'kids':'🧒', 'childcare':'🧸', 'daycare':'🧸', 'baby':'👶',
+  'taxes':'🧾', 'legal':'⚖️',
+  'moving':'📦', 'storage':'📦',
+  'wedding':'💍',
+  'garden':'🌱', 'lawn':'🌱',
+  'office supplies':'🖇️', 'postage':'📮', 'shipping':'📮',
+  'alcohol':'🍷', 'tobacco':'🚬',
+  'subscriptions':'🔁', 'software':'🧩',
+  'other':'🏷️'
 };
 // A user picking their own emoji for a category they typed themselves is a per-household preference
 // (not a code-level default), so it's stored on state, not in the CATEGORY_EMOJI constant above.
@@ -3223,6 +3244,14 @@ function setCustomCategoryEmoji(name, emoji){
   if (emoji) map[name] = emoji; else delete map[name]; // no emoji chosen -> fall back to the standard one for everyone
   persist();
 }
+// Whole-word/phrase containment, not raw substring — a raw indexOf let "car" match inside "Daycare" or
+// "Credit Card" (both just happen to contain the letters c-a-r), handing back the wrong emoji. \b keeps a
+// short key from firing unless it appears as its own word (or phrase) inside the category name.
+function categoryTextContainsWord(haystack, word){
+  if (!word) return false;
+  var re = new RegExp('\\b'+word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b');
+  return re.test(haystack);
+}
 function categoryEmoji(name){
   var raw = String(name||'').trim();
   if (!raw) return '🏷️';
@@ -3230,7 +3259,7 @@ function categoryEmoji(name){
   if (custom) return custom;
   var key = raw.toLowerCase();
   if (CATEGORY_EMOJI[key]) return CATEGORY_EMOJI[key];
-  var found = Object.keys(CATEGORY_EMOJI).find(function(k){ return key.indexOf(k)>=0 || k.indexOf(key)>=0; });
+  var found = Object.keys(CATEGORY_EMOJI).find(function(k){ return categoryTextContainsWord(key, k) || categoryTextContainsWord(k, key); });
   return found ? CATEGORY_EMOJI[found] : '🏷️';
 }
 // One combined category list for any category-picker dropdown — your own bill/variable/income names first
