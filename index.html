@@ -1191,6 +1191,49 @@ function incomeLastKnownAmount(i, ym){
   return months.length ? i.amountsByMonth[months[months.length-1]] : 0;
 }
 function incomeMonthlyEquivalent(i, ym){ return INCOME_FREQUENCIES[incomeFreq(i)].perMonth(incomeAmountForMonth(i, ym)); }
+// The transaction (if any) that "confirming" this income source for this month created — this is the ONLY
+// thing metrics()/Overview/the waterfall/budget-vs-actual actually read, because they all total real
+// state.transactions rows. Simply adding an income SOURCE above never created one on its own, which is why
+// income used to show up on the Income page's "planned" total but never on the Overview's "actual" figures.
+function incomeTxForMonth(incomeId, ym){ return txForMonth(ym).find(function(t){ return t.type==='income' && t.incomeId===incomeId; }); }
+// The date a confirmed income transaction gets. Normally that's the source's own pay day within ym — but
+// Overview's KPI tiles show "month to date" for the current month (transactions dated after today don't
+// count yet, on purpose, same as a bill that isn't due yet). If we dated a confirmation on a pay day that
+// hasn't happened yet, confirming it would STILL not show up on Overview until that day arrived — which is
+// exactly the "I put an income but it's not showing on the main page" bug this whole feature exists to fix.
+// So: for the current month, a future pay day is clamped back to today, since confirming it is itself the
+// real-world event of "yes, this money is accounted for." Past/future months are unaffected.
+function incomeConfirmDateFor(i, ym){
+  var p = parseYM(ym), day = clamp(i.payDay||1, 1, daysInMonth(p.y, p.m));
+  var dateStr = ym + '-' + String(day).padStart(2,'0');
+  if (ym === state.today.slice(0,7) && dateStr > state.today) dateStr = state.today;
+  return dateStr;
+}
+// Recurring income (anything except "Variable / irregular") that's been confirmed once keeps auto-confirming
+// itself every month after that — from the month it was first confirmed through the current month — so the
+// user presses "Confirm income" a single time instead of every month forever. Variable income is never
+// auto-generated here: by definition there's no fixed amount to assume, so it always needs a fresh confirm.
+function autoConfirmRecurringIncome(){
+  var changed = false;
+  state.income.forEach(function(i){
+    if (!i.autoConfirm || incomeFreq(i)==='variable') return;
+    var ym = i.autoConfirmSince || state.month;
+    var guard = 0;
+    while (ym <= state.month && guard < 240){
+      if (!incomeTxForMonth(i.id, ym)){
+        var amt = incomeMonthlyEquivalent(i, ym);
+        if (amt > 0){
+          state.transactions.push({id:'t'+Date.now()+Math.random().toString(36).slice(2,7), date: incomeConfirmDateFor(i, ym),
+            merchant:i.name, category:i.name, amount:amt, type:'income', incomeId:i.id, account:'acc-checking', auto:true});
+          changed = true;
+        }
+      }
+      ym = shiftYm(ym, 1);
+      guard++;
+    }
+  });
+  if (changed) persist();
+}
 // real calendar days income lands on this month, resolved from frequency — used to auto-mark paydays on the calendar
 // instead of relying on a single raw payDay number that made no sense for semimonthly/weekly/biweekly income.
 function incomeCalendarDays(ym){
@@ -1826,6 +1869,7 @@ function killChart(id){ if (chartInstances[id]){ chartInstances[id].destroy(); d
 function route(){
   try { if (document.activeElement && document.activeElement !== document.body && document.activeElement.blur) document.activeElement.blur(); } catch(e){}
   normalizeSavingsGoals();
+  autoConfirmRecurringIncome();
   var v = currentView();
   renderNav();
   document.getElementById('view-heading').textContent = HEADS[v][0];
@@ -2032,6 +2076,7 @@ function renderOverview(){
 
     '<div class="card card-pad" style="margin-bottom:16px;">'+
       '<div class="card-title">Budget vs. actual — '+esc(monthLabel(ym))+'</div>'+
+      '<div class="faint" style="margin:-4px 0 10px;">Each row is one category. The pale bar is what you budgeted; the solid bar next to it is what you actually spent — green means you\'re within budget, red means you went over. The exact $ amounts are printed right on the chart.</div>'+
       '<div class="chart-wrap" id="budgetactual-wrap" style="height:'+Math.max(160, budgetActualRowCount*36)+'px;"><canvas id="chart-budgetactual"></canvas></div>'+
       '<div class="chart-legend" id="legend-budgetactual"></div>'+
     '</div>'+
@@ -2271,14 +2316,40 @@ function incomeRow(i){
           '<div class="faint mono" data-day-preview style="font-size:10.5px; margin-top:4px; white-space:nowrap;">'+esc(dayPreviewText(i.payDay||1, state.month))+'</div></div>'
         : '<div class="field" style="flex:1; min-width:120px; margin-bottom:0;"><label>Pay day</label><div class="faint mono" style="padding-top:8px; font-size:12px;" title="'+esc(INCOME_FREQUENCIES[freq].dayNote)+'">15th &amp; last day</div></div>')+
     '</div>'+
+    incomeConfirmHtml(i)+
   '</div>';
+}
+// This is the piece that actually makes an income source count anywhere else in the app — Overview's KPI
+// tiles, the waterfall, and Budget vs. Actual all total real transactions, and adding a source above never
+// created one on its own. "Confirm income" is what logs it. Recurring frequencies only need this once: after
+// that, autoConfirmRecurringIncome() (called at the top of every route()) keeps logging it every month by
+// itself. Variable/irregular income has no fixed amount to assume, so it always needs a fresh confirm.
+function incomeConfirmHtml(i){
+  var ym = state.month, freq = incomeFreq(i);
+  var tx = incomeTxForMonth(i.id, ym);
+  var isVariable = freq==='variable';
+  var body;
+  if (tx){
+    body = '<span class="pill pill-positive">'+ic('check')+' Confirmed '+usd0(tx.amount)+' for '+monthLabel(ym)+'</span>'+
+      '<span class="faint">'+(isVariable ? 'Logged as income for this month. To change the amount, undo below, edit it above, and confirm again.' : 'Confirmed once — now added automatically every month.')+'</span>'+
+      '<button type="button" class="btn btn-ghost btn-sm" data-income-unconfirm="'+i.id+'" style="color:var(--negative); margin-left:auto;">'+(isVariable?'Undo':'Stop auto-adding')+'</button>';
+  } else if (!isVariable && i.autoConfirm){
+    body = '<span class="pill pill-neutral">Auto-confirm is on</span>'+
+      '<span class="faint">This month\'s amount is $0, so there\'s nothing to add yet.</span>'+
+      '<button type="button" class="btn btn-ghost btn-sm" data-income-unconfirm-flag="'+i.id+'" style="color:var(--negative); margin-left:auto;">Stop auto-adding</button>';
+  } else {
+    body = '<span class="faint">'+(isVariable ? 'Enter this month\'s amount above, then confirm it so it counts on the Overview page.' : 'Not counted on the Overview page yet — confirm it once and it\'ll keep adding itself every month.')+'</span>'+
+      '<button type="button" class="btn btn-primary btn-sm" data-income-confirm="'+i.id+'" style="margin-left:auto;">'+ic('check')+' Confirm income</button>';
+  }
+  return '<div class="hstack" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-top:10px; padding-top:10px; border-top:1px dashed var(--line);">'+body+'</div>';
 }
 function renderIncome(){
   var total = incomeTotalPlanned();
   var rows = state.income.map(incomeRow).join('');
   return '<div class="view">'+
     '<div class="card card-pad" style="margin-bottom:16px;"><div class="card-title">Planned monthly income</div><div class="kpi-value" style="color:var(--positive);">'+usd0(total)+'</div>'+
-    '<div class="faint" style="margin-top:4px;">Every paycheck, client payment, or other regular deposit your household counts on, converted to a real monthly figure based on how often it actually arrives — kept separate from spending so it\'s always clear where money comes from.</div></div>'+
+    '<div class="faint" style="margin-top:4px;">Every paycheck, client payment, or other regular deposit your household counts on, converted to a real monthly figure based on how often it actually arrives — kept separate from spending so it\'s always clear where money comes from.</div>'+
+    '<div class="faint" style="margin-top:6px;"><strong>This total is the plan, not the Overview page.</strong> Overview only counts income you\'ve confirmed with the button on each source below — that\'s what turns a planned amount into an actual, dated transaction.</div></div>'+
     '<div class="card card-pad">'+
       '<div class="card-title" style="margin-bottom:10px;">Income sources</div>'+
       (rows || '<div class="empty">No income sources yet — add one below.</div>')+
@@ -3596,6 +3667,28 @@ function paintCharts(view){
       // attention are the first thing you see, not buried at the bottom of an alphabetical-ish list.
       baRows.sort(function(a,b){ return (b.actual-b.budgeted) - (a.actual-a.budgeted); });
       var baActualColors = baRows.map(function(r){ return r.actual > r.budgeted ? negative : positive; });
+      // Printing the actual $ amount right at the end of each bar means "which is which" never depends on
+      // matching a swatch color to a bar — the pale bar and its number, the solid colored bar and its own
+      // matching-colored number, sit right next to each other on every single row.
+      var baLabelPlugin = {
+        id:'baLabels',
+        afterDatasetsDraw: function(chart){
+          var ctx = chart.ctx, metaBudget = chart.getDatasetMeta(0), metaActual = chart.getDatasetMeta(1);
+          ctx.save();
+          ctx.font = "600 10.5px 'IBM Plex Mono', monospace";
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          metaBudget.data.forEach(function(bar, i){
+            ctx.fillStyle = inkFaint;
+            ctx.fillText(usd0(baRows[i].budgeted), bar.x + 6, bar.y);
+          });
+          metaActual.data.forEach(function(bar, i){
+            ctx.fillStyle = baActualColors[i];
+            ctx.fillText(usd0(baRows[i].actual), bar.x + 6, bar.y);
+          });
+          ctx.restore();
+        }
+      };
       chartInstances.budgetactual = new Chart(elBA, { type:'bar', data:{
         labels: baRows.map(function(r){ return r.name; }),
         datasets:[
@@ -3603,11 +3696,13 @@ function paintCharts(view){
           {label:'Actual', data: baRows.map(function(r){ return r.actual; }), backgroundColor: baActualColors, borderRadius:4, maxBarThickness:14}
         ]
       }, options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        layout:{ padding:{ right:56 } },
         plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:function(ctx){ return ' '+ctx.dataset.label+': '+usd0(ctx.parsed.x); } } } },
-        scales:{ x:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, y:{ grid:{display:false}, border:{display:false} } } } });
+        scales:{ x:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, y:{ grid:{display:false}, border:{display:false} } } },
+      plugins:[baLabelPlugin] });
       var legendBA = document.getElementById('legend-budgetactual');
       if (legendBA) legendBA.innerHTML = chartLegendHtml([
-        {label:'Budgeted', color: hexToRgba(inkFaint,0.6)}, {label:'Actual — under/at budget', color:positive}, {label:'Actual — over budget', color:negative}
+        {label:'Budgeted (pale bar)', color: hexToRgba(inkFaint,0.6)}, {label:'Actual — within budget (green bar)', color:positive}, {label:'Actual — over budget (red bar)', color:negative}
       ]);
     }
     var elBI = document.getElementById('chart-bills-income');
@@ -3966,6 +4061,44 @@ function wireView(view){
         confirmDelete('Remove income source "'+esc(i?i.name:'')+'"?', function(){
           state.income = state.income.filter(function(x){ return x.id!==id; });
           persist(); toast(i?i.name+' removed':'Income removed'); route();
+        });
+      });
+    });
+    // This is what actually makes an income source show up on the Overview page — it logs a real
+    // transaction, which is the only thing metrics()/the waterfall/Budget vs. Actual ever total up.
+    Array.prototype.forEach.call(document.querySelectorAll('[data-income-confirm]'), function(btn){
+      btn.addEventListener('click', function(){
+        var i = incomeById(btn.getAttribute('data-income-confirm')); if (!i) return;
+        var ym = state.month, freq = incomeFreq(i);
+        var amt = incomeMonthlyEquivalent(i, ym);
+        if (!amt){ toast('Enter this month\'s amount above first'); return; }
+        if (freq!=='variable'){ i.autoConfirm = true; i.autoConfirmSince = ym; }
+        state.transactions.push({id:'t'+Date.now()+Math.random().toString(36).slice(2,7), date: incomeConfirmDateFor(i, ym),
+          merchant:i.name, category:i.name, amount:amt, type:'income', incomeId:i.id, account:'acc-checking', auto:false});
+        persist();
+        toast(freq!=='variable' ? 'Confirmed — ' + i.name + ' will now add itself every month' : 'Confirmed ' + usd0(amt) + ' for ' + i.name);
+        route();
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-income-unconfirm]'), function(btn){
+      btn.addEventListener('click', function(){
+        var i = incomeById(btn.getAttribute('data-income-unconfirm')); if (!i) return;
+        var ym = state.month;
+        var tx = incomeTxForMonth(i.id, ym);
+        var isVariable = incomeFreq(i)==='variable';
+        confirmDelete(isVariable ? 'Undo confirming '+esc(i.name)+' for '+monthLabel(ym)+'?' : 'Stop auto-adding '+esc(i.name)+' every month? This also removes this month\'s confirmed transaction.', function(){
+          if (tx) state.transactions = state.transactions.filter(function(x){ return x.id!==tx.id; });
+          if (!isVariable) i.autoConfirm = false;
+          persist(); toast(i.name+' unconfirmed'); route();
+        });
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-income-unconfirm-flag]'), function(btn){
+      btn.addEventListener('click', function(){
+        var i = incomeById(btn.getAttribute('data-income-unconfirm-flag')); if (!i) return;
+        confirmDelete('Stop auto-adding '+esc(i.name)+' every month?', function(){
+          i.autoConfirm = false;
+          persist(); toast(i.name+' auto-confirm turned off'); route();
         });
       });
     });
