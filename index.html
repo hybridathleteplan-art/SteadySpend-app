@@ -1160,8 +1160,11 @@ function debtPaidTx(debtId, ym){ return txForMonth(ym).find(function(t){ return 
 // each page reimplementing its own. The day a newly-paid transaction gets dated on is always this bill's/
 // debt's own resolved due day for the month (effDay) — identical to what Calendar's own grid cells use,
 // so it doesn't matter which page the click happened on.
-function toggleBillPaid(billId){
-  var ym = state.month;
+// targetYm defaults to whatever month is currently being viewed (Calendar/Budget always mean that month),
+// but Overview's "Due this week" can point at NEXT month's occurrence once this month's due day has already
+// passed — callers there pass that occurrence's own month explicitly so tapping "paid" lands on the right one.
+function toggleBillPaid(billId, targetYm){
+  var ym = targetYm || state.month;
   var bill = state.bills.find(function(b){ return b.id===billId; });
   if (!bill) return;
   var existing = billPaidTx(billId, ym);
@@ -1176,8 +1179,8 @@ function toggleBillPaid(billId){
   state.transactions.push({id:'t'+Date.now(), date: ym+'-'+String(day).padStart(2,'0'), merchant:bill.name, category:bill.name, amount:bill.budgeted, type:'bill', billId:bill.id, account:'acc-checking', auto:false});
   persist(); toast(bill.name+' marked paid'); route();
 }
-function toggleDebtPaid(debtId){
-  var ym = state.month;
+function toggleDebtPaid(debtId, targetYm){
+  var ym = targetYm || state.month;
   var d = debtById(debtId);
   if (!d) return;
   var existing = debtPaidTx(debtId, ym);
@@ -1194,10 +1197,10 @@ function toggleDebtPaid(debtId){
 }
 function wireBillDebtToggles(){
   Array.prototype.forEach.call(document.querySelectorAll('[data-bill-toggle]'), function(el){
-    el.addEventListener('click', function(){ toggleBillPaid(el.getAttribute('data-bill-toggle')); });
+    el.addEventListener('click', function(){ toggleBillPaid(el.getAttribute('data-bill-toggle'), el.getAttribute('data-toggle-ym')); });
   });
   Array.prototype.forEach.call(document.querySelectorAll('[data-debt-toggle]'), function(el){
-    el.addEventListener('click', function(){ toggleDebtPaid(el.getAttribute('data-debt-toggle')); });
+    el.addEventListener('click', function(){ toggleDebtPaid(el.getAttribute('data-debt-toggle'), el.getAttribute('data-toggle-ym')); });
   });
 }
 
@@ -1454,16 +1457,21 @@ function dueThisWeekItems(days){
   }
   state.bills.forEach(function(b){
     var occ = billFreq(b)==='yearly' ? nextYearlyOccurrence(b) : occurrenceThisOrNextMonth(b.dueDay);
-    var paid = !!billPaidTx(b.id, ymOfDate(occ));
+    var occYm = ymOfDate(occ);
+    var paid = !!billPaidTx(b.id, occYm);
     var daysUntil = Math.round((occ - todayDate) / 86400000);
-    if (!paid && daysUntil>=0 && daysUntil<=days) items.push({ name:b.name, amount:billFreq(b)==='yearly'?b.budgeted:b.budgeted, kind:'Bill', date:occ, daysUntil:daysUntil });
+    // billId + ym travel with the item so Overview can offer a tap-to-pay control that marks the RIGHT
+    // month paid — this occurrence can land in next month once this month's due day has already passed,
+    // which is not necessarily state.month (the month currently being viewed elsewhere in the app).
+    if (!paid && daysUntil>=0 && daysUntil<=days) items.push({ name:b.name, amount:billFreq(b)==='yearly'?b.budgeted:b.budgeted, kind:'Bill', date:occ, daysUntil:daysUntil, billId:b.id, ym:occYm });
   });
   (state.debts||[]).forEach(function(d){
     if (!d.dueDay) return;
     var occ = occurrenceThisOrNextMonth(d.dueDay);
-    var paid = !!debtPaidTx(d.id, ymOfDate(occ));
+    var occYm = ymOfDate(occ);
+    var paid = !!debtPaidTx(d.id, occYm);
     var daysUntil = Math.round((occ - todayDate) / 86400000);
-    if (!paid && daysUntil>=0 && daysUntil<=days) items.push({ name:d.name, amount:d.minPayment, kind:'Loan', date:occ, daysUntil:daysUntil });
+    if (!paid && daysUntil>=0 && daysUntil<=days) items.push({ name:d.name, amount:d.minPayment, kind:'Loan', date:occ, daysUntil:daysUntil, debtId:d.id, ym:occYm });
   });
   items.sort(function(a,b){ return a.date-b.date; });
   return items;
@@ -1969,10 +1977,10 @@ function renderOverview(){
   } : null;
 
   var unpaidBills = state.bills.filter(function(b){ return billActiveInMonth(b, ym) && !billPaidTx(b.id, ym); }).map(function(b){
-    return { name:b.name, amount:b.budgeted, dueDay:effDay(b.dueDay, ym), kind:'Bill' };
+    return { name:b.name, amount:b.budgeted, dueDay:effDay(b.dueDay, ym), kind:'Bill', billId:b.id };
   });
   var unpaidDebts = (state.debts||[]).filter(function(d){ return d.dueDay && !debtPaidTx(d.id, ym); }).map(function(d){
-    return { name:d.name, amount:d.minPayment, dueDay:effDay(d.dueDay, ym), kind:'Debt' };
+    return { name:d.name, amount:d.minPayment, dueDay:effDay(d.dueDay, ym), kind:'Debt', debtId:d.id };
   });
   var unpaidUpcoming = unpaidBills.concat(unpaidDebts).sort(function(a,b){ return a.dueDay-b.dueDay; }).slice(0,6);
 
@@ -1998,9 +2006,12 @@ function renderOverview(){
       '</div>'+
       (dueWeek.length ? '<div style="margin-top:6px;">'+dueWeek.map(function(it){
         var label = it.daysUntil===0 ? 'today' : it.daysUntil===1 ? 'tomorrow' : it.date.toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'});
+        var toggleAttr = it.debtId ? 'data-debt-toggle="'+it.debtId+'"' : 'data-bill-toggle="'+it.billId+'"';
         return '<div class="hstack" style="justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--line);">'+
           '<div class="hstack" style="gap:8px; min-width:0;"><span style="font-weight:600; font-size:13px;">'+esc(it.name)+'</span><span class="pill pill-neutral">'+it.kind+'</span></div>'+
-          '<div class="hstack" style="gap:8px; flex:none;"><span class="num muted" style="font-size:12.5px;">'+usd0(it.amount)+'</span><span class="faint">'+label+'</span></div>'+
+          '<div class="hstack" style="gap:8px; flex:none;"><span class="num muted" style="font-size:12.5px;">'+usd0(it.amount)+'</span><span class="faint">'+label+'</span>'+
+            '<button class="btn btn-ghost btn-sm" '+toggleAttr+' data-toggle-ym="'+it.ym+'" title="Tap to mark as paid" style="padding:3px 8px; color:var(--positive);">'+ic('check')+' Mark paid</button>'+
+          '</div>'+
         '</div>';
       }).join('')+'</div>' : '<div class="empty" style="margin-top:6px;">Nothing due in the next 7 days.</div>')+
     '</div>'+
@@ -2126,9 +2137,12 @@ function renderOverview(){
         '<div class="hstack" style="justify-content:space-between; margin-bottom:6px;"><div class="card-title" style="margin-bottom:0;">Upcoming payments</div><a href="#calendar" class="faint" style="text-decoration:none;">Calendar &rarr;</a></div>'+
         (unpaidUpcoming.length ? unpaidUpcoming.map(function(b){
           var overdue = b.dueDay < TODAY.getDate();
+          var toggleAttr = b.debtId ? 'data-debt-toggle="'+b.debtId+'"' : 'data-bill-toggle="'+b.billId+'"';
           return '<div class="hstack" style="justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--line);">'+
             '<div class="hstack"><span class="dot" style="background:'+(overdue?'var(--negative)':'var(--accent)')+'"></span><span style="font-weight:600; font-size:13.4px;">'+esc(b.name)+'</span><span class="pill pill-neutral">'+b.kind+'</span></div>'+
-            '<div class="hstack"><span class="num muted" style="font-size:12.5px;">'+usd0(b.amount)+'</span><span class="pill '+(overdue?'pill-negative':'pill-neutral')+'">'+(overdue?'overdue':'due '+ordinal(b.dueDay))+'</span></div>'+
+            '<div class="hstack"><span class="num muted" style="font-size:12.5px;">'+usd0(b.amount)+'</span>'+
+              '<span class="pill '+(overdue?'pill-negative':'pill-neutral')+'" '+toggleAttr+' style="cursor:pointer;" title="Tap to mark as paid">'+(overdue?'overdue':'due '+ordinal(b.dueDay))+'</span>'+
+            '</div>'+
           '</div>';
         }).join('') : '<div class="empty">Everything is paid for this month.</div>')+
       '</div>'+
@@ -4163,6 +4177,7 @@ function wireView(view){
   });
 
   if (view==='overview'){
+    wireBillDebtToggles();
     Array.prototype.forEach.call(document.querySelectorAll('#range-seg button'), function(btn){
       btn.addEventListener('click', function(){
         rangeState.mode = btn.getAttribute('data-range');
