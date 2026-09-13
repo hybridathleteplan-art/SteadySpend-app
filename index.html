@@ -2113,8 +2113,11 @@ function renderOverview(){
 
     '<div class="card card-pad" style="margin-bottom:16px;">'+
       '<div class="card-title">Budget vs. actual — '+esc(monthLabel(ym))+'</div>'+
-      '<div class="faint" style="margin:-4px 0 10px;">Each row is one category. The pale bar is what you budgeted; the solid bar next to it is what you actually spent — green means you\'re within budget, red means you went over. The exact $ amounts, plus exactly how far over or under you are, are printed right on the chart.</div>'+
-      '<div class="chart-wrap" id="budgetactual-wrap" style="height:'+Math.max(160, budgetActualRowCount*36)+'px;"><canvas id="chart-budgetactual"></canvas></div>'+
+      '<div class="faint" style="margin:-4px 0 10px;">Each row is one category. The pale bar is what you budgeted; the solid bar next to it is what you actually spent — green means you\'re within budget, red means you went over. The exact $ amounts are printed on the chart; exactly how far over, under, or right on budget each category is is listed next to it.</div>'+
+      '<div class="hstack" style="align-items:flex-start; gap:18px; flex-wrap:wrap;">'+
+        '<div class="chart-wrap" id="budgetactual-wrap" style="height:'+Math.max(160, budgetActualRowCount*36)+'px; flex:3 1 320px; min-width:240px;"><canvas id="chart-budgetactual"></canvas></div>'+
+        '<div id="ba-status-list" style="flex:2 1 190px; min-width:170px; max-width:300px;"></div>'+
+      '</div>'+
       '<div class="chart-legend" id="legend-budgetactual"></div>'+
     '</div>'+
 
@@ -3826,19 +3829,29 @@ function paintCharts(view){
       // Most-over-budget first — that's the whole point of this chart, so the categories that need
       // attention are the first thing you see, not buried at the bottom of an alphabetical-ish list.
       baRows.sort(function(a,b){ return (b.actual-b.budgeted) - (a.actual-a.budgeted); });
-      var baActualColors = baRows.map(function(r){ return r.actual > r.budgeted ? negative : positive; });
-      // "Where am I at" for each row is the gap between the two bars, not either number alone — so that
-      // gap gets spelled out directly ("+$120 over" / "$40 under"), right after the actual bar, instead of
-      // making you subtract two printed numbers yourself.
-      var baDeltaText = baRows.map(function(r){
+      // Three real states, not two — "right on budget" is its own thing and gets its own neutral color,
+      // so it never reads the same as "under budget" (both used to just be plain green, which is exactly
+      // what made a $0-over row and a genuinely-under row impossible to tell apart at a glance).
+      var baStatus = baRows.map(function(r){
         var d = r.actual - r.budgeted;
-        if (Math.abs(d) < 0.5) return 'on budget';
-        return d > 0 ? ('+'+usd0(d)+' over') : (usd0(Math.abs(d))+' under');
+        if (Math.abs(d) < 0.5) return 'on';
+        return d > 0 ? 'over' : 'under';
       });
-      // Printing the actual $ amount (and how far over/under budget it is) right at the end of each bar
-      // means "which is which" never depends on matching a swatch color to a bar — the pale bar and its
-      // number, the solid colored bar and its own matching-colored number + status, sit right next to
-      // each other on every single row.
+      var baStatusColor = { over: negative, under: positive, on: inkSoft };
+      var baActualColors = baStatus.map(function(s){ return baStatusColor[s]; });
+      // "Where am I at" for each row is the gap between the two bars, not either number alone — so that
+      // gap gets spelled out directly ("+$120 over" / "$40 under" / "On budget"). This used to be drawn
+      // right on the chart bars, but crowded the canvas and made the on-budget/under-budget colors read
+      // as identical — it's now a separate list next to the chart instead (built below), each with its
+      // own colored pill.
+      var baDeltaText = baRows.map(function(r, i){
+        var d = r.actual - r.budgeted;
+        if (baStatus[i]==='on') return 'On budget';
+        return baStatus[i]==='over' ? ('+'+usd0(d)+' over') : (usd0(Math.abs(d))+' under');
+      });
+      // The chart itself only prints the plain $ amounts on each bar — "which is which" already doesn't
+      // depend on matching a swatch color to a bar, since the pale bar and its number, and the solid
+      // colored bar and its own matching-colored number, sit right next to each other on every row.
       var baLabelPlugin = {
         id:'baLabels',
         afterDatasetsDraw: function(chart){
@@ -3846,19 +3859,14 @@ function paintCharts(view){
           ctx.save();
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
+          ctx.font = "600 10.5px 'IBM Plex Mono', monospace";
           metaBudget.data.forEach(function(bar, i){
-            ctx.font = "600 10.5px 'IBM Plex Mono', monospace";
             ctx.fillStyle = inkFaint;
             ctx.fillText(usd0(baRows[i].budgeted), bar.x + 6, bar.y);
           });
           metaActual.data.forEach(function(bar, i){
-            ctx.font = "600 10.5px 'IBM Plex Mono', monospace";
             ctx.fillStyle = baActualColors[i];
-            var actualText = usd0(baRows[i].actual);
-            ctx.fillText(actualText, bar.x + 6, bar.y);
-            var actualW = ctx.measureText(actualText).width;
-            ctx.font = "600 9.5px 'Public Sans', sans-serif";
-            ctx.fillText(' · '+baDeltaText[i], bar.x + 6 + actualW, bar.y);
+            ctx.fillText(usd0(baRows[i].actual), bar.x + 6, bar.y);
           });
           ctx.restore();
         }
@@ -3870,16 +3878,27 @@ function paintCharts(view){
           {label:'Actual', data: baRows.map(function(r){ return r.actual; }), backgroundColor: baActualColors, borderRadius:4, maxBarThickness:14}
         ]
       }, options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
-        layout:{ padding:{ right:112 } },
+        layout:{ padding:{ right:56 } },
         plugins:{ legend:{display:false}, tooltip:{ callbacks:{
           label:function(ctx){ return ' '+ctx.dataset.label+': '+usd0(ctx.parsed.x); },
           afterBody:function(items){ var i = items[0].dataIndex; return 'Status: '+baDeltaText[i]; }
         } } },
         scales:{ x:{ grid:dashedGrid, ticks:moneyTick, border:{display:false} }, y:{ grid:{display:false}, border:{display:false} } } },
       plugins:[baLabelPlugin] });
+      // The over/under/on-budget status lives here now, next to the chart, instead of crowded onto the
+      // bars themselves — one row per category, each with its own color-matched pill so "on budget" is
+      // never confusable with "under budget" again (they're different colors, not both plain green).
+      var baStatusListEl = document.getElementById('ba-status-list');
+      if (baStatusListEl) baStatusListEl.innerHTML = baRows.map(function(r, i){
+        var pillClass = baStatus[i]==='over' ? 'pill-negative' : baStatus[i]==='under' ? 'pill-positive' : 'pill-neutral';
+        return '<div class="hstack" style="justify-content:space-between; gap:8px; padding:6px 0; border-bottom:1px solid var(--line);">'+
+          '<span style="font-size:12px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="'+esc(r.name)+'">'+esc(r.name)+'</span>'+
+          '<span class="pill '+pillClass+'" style="flex:none;">'+esc(baDeltaText[i])+'</span>'+
+        '</div>';
+      }).join('');
       var legendBA = document.getElementById('legend-budgetactual');
       if (legendBA) legendBA.innerHTML = chartLegendHtml([
-        {label:'Budgeted (pale bar)', color: hexToRgba(inkFaint,0.6)}, {label:'Actual — within budget (green bar)', color:positive}, {label:'Actual — over budget (red bar)', color:negative}
+        {label:'Budgeted (pale bar)', color: hexToRgba(inkFaint,0.6)}, {label:'Under budget', color:positive}, {label:'On budget', color:inkSoft}, {label:'Over budget', color:negative}
       ]);
     }
     var elBI = document.getElementById('chart-bills-income');
